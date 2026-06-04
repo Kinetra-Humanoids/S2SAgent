@@ -1,0 +1,16 @@
+[project]
+name = "rai-s2s-agent-bundle"
+version = "0.1.0"
+description = "Standalone speech-to-speech RAI agent bundle"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "rai_core",
+    "rai_s2s[kokoro,fasterwhisper,whisper]",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+rai_core = { path = "src/rai_core", editable = true }
+rai_s2s = { path = "src/rai_s2s", editable = true }

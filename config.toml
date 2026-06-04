@@ -1,0 +1,120 @@
+[vendor]
+simple_model = "openai"
+complex_model = "openai"
+embeddings_model = "openai"
+
+[openai]
+simple_model = "gpt-4o"
+complex_model = "gpt-5.4"
+embeddings_model = "text-embedding-ada-002"
+base_url = "https://apicz.boyuerichdata.com/v1/"
+
+[aws]
+simple_model = "anthropic.claude-3-haiku-20240307-v1:0"
+complex_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+embeddings_model = "amazon.titan-embed-text-v1"
+region_name = "us-east-1"
+
+[ollama]
+simple_model = "llama3.2"
+complex_model = "llama3.1:70b"
+embeddings_model = "llama3.2"
+base_url = "http://localhost:11434"
+
+[google]
+simple_model = "gemini-3-flash"
+complex_model = "gemini-3-pro"
+embeddings_model = "text-embedding-004"
+
+[tracing]
+project = "rai"
+
+[tracing.langfuse]
+use_langfuse = false
+host = "http://localhost:3000"
+
+[tracing.langsmith]
+use_langsmith = false
+host = "https://api.smith.langchain.com"
+
+[s2s]
+mic_device = "default"
+speaker_device = "default"
+speaker_backend = "sounddevice"
+asr = "doubao"
+tts = "doubao"
+openai_whisper_model = "whisper-1"
+whisper_model = "medium"
+openai_base_url = ""
+language = "zh"
+sample_rate = 16000
+vad_threshold = 0.5
+block_size = 1280
+grace_period = 0.8
+stream_response = false
+
+[tools]
+python_tools = true
+
+[unitree_g1]
+tools_enabled = false
+enabled_tools = [
+    "stop",
+    "move",
+    "posture",
+    "gesture",
+]
+network_interface = ""
+control_enabled = false
+
+[unitree_g1_audio]
+enabled = false
+network_interface = ""
+app_name = "rai_s2s"
+chunk_size = 96000
+stop_after_play = false
+
+[ros2]
+ros2_tools = false
+nav2_tools = false
+ros2_readable = ""
+ros2_writable = ""
+ros2_forbidden = ""
+ros2_node_name = "rai_s2s_tools"
+use_sim_time = false
+nav2_frame_id = "map"
+nav2_action_name = "navigate_to_pose"
+
+[asr]
+recording_device_name = "default"
+transcription_model = "DoubaoASR"
+language = "zh"
+vad_model = "SileroVAD"
+silence_grace_period = 0.8
+vad_threshold = 0.5
+use_wake_word = false
+wake_word_model = ""
+wake_word_threshold = 0.5
+wake_word_model_name = ""
+transcription_model_name = "medium"
+
+[tts]
+vendor = "DoubaoTTS"
+voice = "af_sarah"
+speaker_device_name = "default"
+
+[doubao_speech]
+app_id = "6307072458"
+asr_url = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+asr_model = "bigmodel"
+asr_auth_mode = "old"
+asr_resource_id = "volc.bigasr.auc_turbo"
+asr_app_key = ""
+asr_access_key = ""
+asr_api_key = ""
+tts_url = "https://openspeech.bytedance.com/api/v1/tts"
+tts_cluster = "volcano_tts"
+tts_voice_type = "BV001_streaming"
+tts_encoding = "wav"
+tts_sample_rate = 24000
+tts_speed_ratio = 1.0
