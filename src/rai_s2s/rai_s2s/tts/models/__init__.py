@@ -14,7 +14,6 @@
 
 from .base import TTSModel, TTSModelError
 from .doubao_tts import DoubaoTTS
-from .kokoro_tts import KokoroTTS
 from .open_tts import OpenTTS
 
 __all__ = [
@@ -32,4 +31,8 @@ def __getattr__(name: str):
         from .elevenlabs_tts import ElevenLabsTTS
 
         return ElevenLabsTTS
+    if name == "KokoroTTS":
+        from .kokoro_tts import KokoroTTS
+
+        return KokoroTTS
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

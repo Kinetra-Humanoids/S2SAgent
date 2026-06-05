@@ -14,9 +14,7 @@ dependencies = [
     "sounddevice>=0.4.7,<0.5.0",
     "scipy>=1.14.0,<2.0.0",
     "pydub>=0.25.1,<0.26.0",
-    "torchaudio==2.3.1",
-    "onnxruntime>=1.23,<1.24; python_version >= '3.10' and python_version < '3.11' and platform_machine == 'x86_64'",
-    "onnxruntime>=1.24,<1.25; python_version >= '3.12' and python_version < '3.13' and platform_machine == 'x86_64'",
+    "torch==2.3.1",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +22,11 @@ elevenlabs = ["elevenlabs>=1.4.1,<2.0.0"]
 whisper = ["openai-whisper>=20250625,<20250626"]
 fasterwhisper = ["faster-whisper>=1.1.1,<2.0.0"]
 wakeword = ["openwakeword @ git+https://github.com/maciejmajek/openWakeWord.git@chore/remove-tflite-backend"]
-kokoro = ["kokoro-onnx==0.3.3"]
+kokoro = [
+    "kokoro-onnx==0.3.3",
+    "onnxruntime>=1.23,<1.24; python_version >= '3.10' and python_version < '3.11' and platform_machine == 'x86_64'",
+    "onnxruntime>=1.24,<1.25; python_version >= '3.12' and python_version < '3.13' and platform_machine == 'x86_64'",
+]
 gpu = [
     "onnxruntime-gpu>=1.23,<1.24; python_version >= '3.10' and python_version < '3.11' and platform_machine == 'x86_64'",
     "onnxruntime-gpu>=1.24,<1.25; python_version >= '3.12' and python_version < '3.13' and platform_machine == 'x86_64'",

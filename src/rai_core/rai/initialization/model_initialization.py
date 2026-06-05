@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass
@@ -19,11 +21,9 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import coloredlogs
 import tomli
-from langchain_aws import ChatBedrock
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.embeddings import Embeddings
 from langchain_core.tracers.langchain import LangChainTracer
-from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langsmith import Client
 

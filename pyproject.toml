@@ -5,8 +5,14 @@ description = "Standalone speech-to-speech RAI agent bundle"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "rai_core",
-    "rai_s2s[kokoro,fasterwhisper,whisper]",
+    "rai_s2s",
+    "streamlit>=1.44,<2.0.0",
 ]
+
+[project.optional-dependencies]
+local-asr = ["rai_s2s[fasterwhisper,whisper]"]
+local-tts = ["rai_s2s[kokoro]"]
+all-local-models = ["rai_s2s[fasterwhisper,kokoro,whisper]"]
 
 [tool.uv]
 package = false

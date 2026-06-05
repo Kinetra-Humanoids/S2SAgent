@@ -15,6 +15,15 @@ cp .env.example .env
 ./setup_env.sh
 ```
 
+The default environment installs the configured OpenAI-compatible LLM and
+Doubao speech path. Install local speech models only when needed:
+
+```bash
+uv sync --extra local-asr
+uv sync --extra local-tts
+uv sync --extra all-local-models
+```
+
 ## Run
 
 Open the configurator:

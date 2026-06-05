@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .tts.models import KokoroTTS, OpenTTS
+from .tts.models import OpenTTS
 
 try:
 	from .tts.agents import TextToSpeechAgent
@@ -29,4 +29,8 @@ def __getattr__(name: str):
 		from .tts.models import ElevenLabsTTS
 
 		return ElevenLabsTTS
+	if name == "KokoroTTS":
+		from .tts.models import KokoroTTS
+
+		return KokoroTTS
 	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

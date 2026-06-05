@@ -22,7 +22,7 @@ from .agents.initialization import (
     WWConfig,
     load_config,
 )
-from .models import DoubaoASR, FasterWhisper, LocalWhisper, OpenAIWhisper, SileroVAD
+from .models import DoubaoASR, OpenAIWhisper, SileroVAD
 
 __all__ = [
     "TRANSCRIBE_MODELS",
@@ -41,3 +41,11 @@ __all__ = [
     "WWConfig",
     "load_config",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"FasterWhisper", "LocalWhisper"}:
+        from .models import FasterWhisper, LocalWhisper
+
+        return {"FasterWhisper": FasterWhisper, "LocalWhisper": LocalWhisper}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

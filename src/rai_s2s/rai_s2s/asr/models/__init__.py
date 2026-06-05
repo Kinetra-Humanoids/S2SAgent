@@ -14,7 +14,6 @@
 
 from .base import BaseTranscriptionModel, BaseVoiceDetectionModel
 from .doubao_asr import DoubaoASR
-from .local_whisper import FasterWhisper, LocalWhisper
 from .open_ai_whisper import OpenAIWhisper
 # from .open_wake_word import OpenWakeWord
 from .silero_vad import SileroVAD
@@ -29,3 +28,11 @@ __all__ = [
     # "OpenWakeWord",
     "SileroVAD",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"FasterWhisper", "LocalWhisper"}:
+        from .local_whisper import FasterWhisper, LocalWhisper
+
+        return {"FasterWhisper": FasterWhisper, "LocalWhisper": LocalWhisper}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

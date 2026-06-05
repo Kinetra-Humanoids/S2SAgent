@@ -39,15 +39,31 @@ from rai.tools.python import get_basic_tools, get_unitree_g1_tools
 from rai_s2s.asr.models import (
     BaseTranscriptionModel,
     DoubaoASR,
-    FasterWhisper,
-    LocalWhisper,
     OpenAIWhisper,
     SileroVAD,
 )
 from rai_s2s.s2s.agents import SpeechToSpeechAgent
 from rai_s2s.sound_device import SoundDeviceConfig, SoundDeviceMessage
 from rai_s2s.sound_device.unitree_g1_audio import UnitreeG1AudioPlayer
-from rai_s2s.tts.models import DoubaoTTS, KokoroTTS, TTSModel
+from rai_s2s.tts.models import DoubaoTTS, TTSModel
+
+
+S2S_SYSTEM_PROMPT = """You are a concise voice assistant for a physical robot (Unitree G1).
+Reply in the same language as the user, using short, natural sentences suitable
+for speech.
+
+When the user explicitly asks the robot to move, stop, change posture, or perform
+a gesture, use the matching Unitree G1 tool if it is available. Treat commands
+such as "stop", "停止", and "停下" as urgent and call the stop tool immediately.
+Never claim that a physical action was performed unless the corresponding tool
+completed successfully. If a required tool is unavailable or fails, clearly say
+that the action was not performed.
+
+Ask for clarification before acting when a physical command is ambiguous. Refuse
+unsafe physical actions, but do not add unnecessary warnings to ordinary,
+clearly specified commands. For non-action requests, answer normally without
+calling a robot control tool.
+"""
 
 
 def _parse_csv(value: Optional[str]) -> Optional[list[str]]:
@@ -557,10 +573,13 @@ def main() -> int:
 
     # Text agent: ReAct + configured vendor from config.toml
     # NOTE: This requires API key(s) according to the selected vendor in config.toml.
+
+    system_prompt = S2S_SYSTEM_PROMPT
     text_agent = ReActAgent(
         target_connectors={"to_human": connector},
         llm=llm,
         tools=tools,
+        system_prompt=system_prompt,
         stream_response=args.stream_response,
     )
 
@@ -601,12 +620,16 @@ def main() -> int:
     vad = SileroVAD(args.sample_rate, args.vad_threshold)
     match args.asr:
         case "fasterwhisper":
+            from rai_s2s.asr.models import FasterWhisper
+
             asr = FasterWhisper(
                 args.whisper_model,
                 args.sample_rate,
                 language=args.language,
             )
         case "local":
+            from rai_s2s.asr.models import LocalWhisper
+
             asr = LocalWhisper(
                 args.whisper_model,
                 args.sample_rate,
@@ -635,6 +658,8 @@ def main() -> int:
             raise ValueError(f"Unknown ASR backend: {args.asr}")
     match args.tts:
         case "kokoro":
+            from rai_s2s.tts.models import KokoroTTS
+
             tts = KokoroTTS(voice=args.kokoro_voice)
         case "doubao":
             tts = DoubaoTTS(

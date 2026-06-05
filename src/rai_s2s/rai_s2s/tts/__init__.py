@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .agents import TTS_MODELS, TTSAgentConfig, load_config
-from .models import DoubaoTTS, KokoroTTS, OpenTTS
+from .models import DoubaoTTS, OpenTTS
 
 try:
     from .agents import TextToSpeechAgent
@@ -39,4 +39,8 @@ def __getattr__(name: str):
         from .models import ElevenLabsTTS
 
         return ElevenLabsTTS
+    if name == "KokoroTTS":
+        from .models import KokoroTTS
+
+        return KokoroTTS
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
