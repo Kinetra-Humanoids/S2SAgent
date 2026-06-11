@@ -161,3 +161,14 @@ uv run python app/s2s_no_ros.py \
 
 The speaker backend converts generated TTS audio to 16 kHz mono 16-bit PCM
 before calling `AudioClient.PlayStream`.
+
+Quick standalone test for Doubao TTS -> Unitree G1 speaker:
+
+```bash
+uv run python app/test_doubao_unitree_g1_audio.py \
+  "你好，我是 RAI。正在测试豆包语音合成和宇树 G1 播放。" \
+  --unitree-g1-audio-network-interface en0
+```
+
+Use `--no-play` to only verify Doubao synthesis and save
+`doubao_unitree_g1_test.wav`.
