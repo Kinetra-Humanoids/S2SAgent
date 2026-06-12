@@ -16,6 +16,12 @@ class UnitreeG1AudioError(Exception):
     pass
 
 
+def _is_success_code(code) -> bool:
+    if isinstance(code, (tuple, list)) and code:
+        return code[0] == 0
+    return code == 0
+
+
 @lru_cache(maxsize=4)
 def _get_audio_client(network_interface: str):
     try:
@@ -77,8 +83,16 @@ class UnitreeG1AudioPlayer:
 
         for offset in range(0, len(pcm_data), self.chunk_size):
             chunk = pcm_data[offset : offset + self.chunk_size]
+            chunk_index = offset // self.chunk_size + 1
+            chunk_count = (len(pcm_data) + self.chunk_size - 1) // self.chunk_size
             code = self.client.PlayStream(self.app_name, stream_id, chunk)
-            if code != 0:
+            print(
+                "[Unitree Audio] "
+                f"PlayStream chunk {chunk_index}/{chunk_count}, "
+                f"bytes={len(chunk)}, code={code}",
+                flush=True,
+            )
+            if not _is_success_code(code):
                 raise UnitreeG1AudioError(
                     f"Unitree G1 PlayStream failed with SDK return code: {code}"
                 )
@@ -89,7 +103,8 @@ class UnitreeG1AudioPlayer:
 
     def stop(self) -> None:
         code = self.client.PlayStop(self.app_name)
-        if code != 0:
+        print(f"[Unitree Audio] PlayStop code={code}", flush=True)
+        if not _is_success_code(code):
             raise UnitreeG1AudioError(
                 f"Unitree G1 PlayStop failed with SDK return code: {code}"
             )

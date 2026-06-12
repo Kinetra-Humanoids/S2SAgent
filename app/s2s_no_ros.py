@@ -262,8 +262,21 @@ class LocalS2SAgent(SpeechToSpeechAgent):
                 data = self.text_queues[self.current_transcription_id].get(block=False)
             except Empty:
                 continue
-            audio = self.tts_model.get_speech(data)
-            self._unitree_audio_player.play(audio)
+            try:
+                self.logger.info("Generating Unitree G1 speech: %s", data)
+                print(f"[Unitree Audio] TTS input: {data}", flush=True)
+                audio = self.tts_model.get_speech(data)
+            except Exception as exc:
+                self.logger.exception("Failed to generate TTS audio for Unitree G1")
+                print(f"[Unitree Audio Error] TTS failed: {exc}", flush=True)
+                continue
+            try:
+                self.logger.info("Playing speech through Unitree G1 speaker")
+                self._unitree_audio_player.play(audio)
+                print("[Unitree Audio] Playback completed", flush=True)
+            except Exception as exc:
+                self.logger.exception("Failed to play audio through Unitree G1")
+                print(f"[Unitree Audio Error] Playback failed: {exc}", flush=True)
 
     def run(self):
         if self._unitree_audio_player is None:
