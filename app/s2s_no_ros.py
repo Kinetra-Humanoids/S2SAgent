@@ -22,6 +22,7 @@ import argparse
 import logging
 import os
 import signal
+import threading
 import time
 from pathlib import Path
 from queue import Empty
@@ -759,15 +760,42 @@ def main() -> int:
     text_agent.run()
     s2s.run()
 
+    cleanup_started = threading.Event()
+
+    def run_cleanup_step(name: str, func, timeout_sec: float = 5.0) -> None:
+        error: list[BaseException] = []
+
+        def target():
+            try:
+                func()
+            except BaseException as exc:
+                error.append(exc)
+
+        thread = threading.Thread(target=target, name=f"cleanup_{name}", daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_sec)
+        if thread.is_alive():
+            logging.warning(
+                "%s did not stop within %.1f seconds; continuing shutdown.",
+                name,
+                timeout_sec,
+            )
+            return
+        if error:
+            logging.warning("Error while stopping %s: %s", name, error[0])
+
     def cleanup(_signum=None, _frame=None):
+        if cleanup_started.is_set():
+            logging.warning("Shutdown already in progress; forcing exit.")
+            os._exit(1)
+        cleanup_started.set()
         logging.info("Stopping...")
-        try:
-            s2s.stop()
-        finally:
-            text_agent.stop()
-            if ros2_connector is not None:
-                ros2_connector.shutdown()
-        raise SystemExit(0)
+        run_cleanup_step("speech-to-speech agent", s2s.stop, timeout_sec=5.0)
+        run_cleanup_step("text agent", text_agent.stop, timeout_sec=5.0)
+        if ros2_connector is not None:
+            run_cleanup_step("ROS2 connector", ros2_connector.shutdown, timeout_sec=5.0)
+        logging.info("Stopped.")
+        os._exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)

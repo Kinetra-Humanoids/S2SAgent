@@ -19,7 +19,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Deque, Dict, List, Literal, Optional, TypedDict
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import Runnable
 
 from rai.agents.base import BaseAgent
@@ -118,6 +118,7 @@ class LangChainAgent(BaseAgent):
         self.logger = logging.getLogger(__name__)
         self.agent = runnable
         self.stream_response = stream_response
+        self.target_connectors = target_connectors
         self.new_message_behavior: newMessageBehaviorType = new_message_behavior
         self.tracing_callbacks = get_tracing_callbacks()
         self.state = state or ReActAgentState(messages=[])
@@ -204,6 +205,22 @@ class LangChainAgent(BaseAgent):
             ):
                 if self._interrupt_event.is_set():
                     break
+        except Exception as exc:
+            self.logger.exception("Agent failed while running the LLM graph")
+            error_text = (
+                "LLM call failed. Please check the model API key/base URL and try again. "
+                f"Error: {exc}"
+            )
+            self.state["messages"].append(AIMessage(content=error_text))
+            for target, connector in self.target_connectors.items():
+                try:
+                    connector.send_message(HRIMessage(text=error_text), target)
+                except Exception as send_exc:
+                    self.logger.error(
+                        "Failed to send LLM error message to %s: %s",
+                        target,
+                        send_exc,
+                    )
         finally:
             self._agent_ready_event.set()
 
