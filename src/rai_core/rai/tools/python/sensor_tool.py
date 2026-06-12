@@ -17,10 +17,12 @@ from __future__ import annotations
 import os
 import time
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 from langchain_core.tools import BaseTool, tool
+from PIL import Image as PILImage
 
 from rai.messages import preprocess_image
 
@@ -66,6 +68,27 @@ def _summarize_image(name: str, image: np.ndarray, timestamp: float | None) -> s
         return f"{name}: shape={shape}"
     age_ms = (time.time() - float(timestamp)) * 1000.0
     return f"{name}: shape={shape}, age={age_ms:.0f}ms"
+
+
+def _safe_filename_part(value: str) -> str:
+    return "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in value)
+
+
+def _save_image(name: str, image: np.ndarray, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    millis = int((time.time() % 1) * 1000)
+    path = output_dir / f"sensor_{timestamp}_{millis:03d}_{_safe_filename_part(name)}.png"
+
+    array = image
+    if array.dtype in (np.float32, np.float64):
+        array = np.clip(array, 0.0, 1.0)
+        array = (array * 255.0).round().astype(np.uint8)
+    elif array.dtype != np.uint8:
+        array = np.asarray(array)
+
+    PILImage.fromarray(np.ascontiguousarray(array)).save(path)
+    return path
 
 
 def get_sensor_tools(
@@ -132,8 +155,12 @@ def get_sensor_tools(
             if not isinstance(image, np.ndarray):
                 summary_lines.append(f"{name}: unsupported frame type {type(image).__name__}")
                 continue
+            saved_path = _save_image(name, image, Path("OUTPUT"))
             artifact_images.append(preprocess_image(image))
-            summary_lines.append(_summarize_image(name, image, timestamps.get(name)))
+            summary_lines.append(
+                f"{_summarize_image(name, image, timestamps.get(name))}, "
+                f"saved={saved_path}"
+            )
 
         if not artifact_images:
             raise RuntimeError("Camera data was received, but no usable image frame was found.")
