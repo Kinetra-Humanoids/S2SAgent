@@ -109,7 +109,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "unitree_g1": {
         "tools_enabled": False,
-        "enabled_tools": ["stop", "move", "posture", "gesture"],
+        "enabled_tools": [
+            "stop",
+            "move",
+            "posture",
+            "gesture",
+            "arm_action",
+        ],
         "network_interface": "",
         "control_enabled": False,
     },
@@ -119,6 +125,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "app_name": "rai_s2s",
         "chunk_size": 96000,
         "stop_after_play": False,
+    },
+    "sensor_tool": {
+        "enabled": False,
+        "transport": "zmq",
+        "server_ip": "localhost",
+        "port": 5555,
+        "http_base_url": "",
+        "default_camera": "",
+        "blocking": True,
     },
     "ros2": {
         "ros2_tools": False,
@@ -371,10 +386,13 @@ def s2s_tab(config: dict[str, Any]) -> None:
     with cols[0]:
         s2s["mic_device"] = device_select("Microphone", s2s["mic_device"], output=False)
         asr["recording_device_name"] = s2s["mic_device"]
+        asr_backend_options = options_with_current(
+            ["fasterwhisper", "local", "openai", "doubao"], s2s["asr"]
+        )
         s2s["asr"] = st.selectbox(
             "ASR backend",
-            options_with_current(["fasterwhisper", "local", "openai", "doubao"], s2s["asr"]),
-            index=options_with_current(["fasterwhisper", "local", "openai", "doubao"], s2s["asr"]).index(s2s["asr"]),
+            asr_backend_options,
+            index=asr_backend_options.index(s2s["asr"]),
         )
         s2s["language"] = select_option(
             "Language code",
@@ -382,20 +400,6 @@ def s2s_tab(config: dict[str, Any]) -> None:
             s2s["language"],
         )
         asr["language"] = s2s["language"]
-        s2s["sample_rate"] = st.number_input(
-            "Sample rate", min_value=8000, max_value=48000, value=int(s2s["sample_rate"]), step=1000
-        )
-        s2s["block_size"] = st.number_input(
-            "Block size", min_value=160, max_value=8192, value=int(s2s["block_size"]), step=160
-        )
-        s2s["vad_threshold"] = st.slider(
-            "VAD threshold", min_value=0.0, max_value=1.0, value=float(s2s["vad_threshold"])
-        )
-        asr["vad_threshold"] = s2s["vad_threshold"]
-        s2s["grace_period"] = st.number_input(
-            "Silence grace period", min_value=0.1, max_value=5.0, value=float(s2s["grace_period"]), step=0.1
-        )
-        asr["silence_grace_period"] = s2s["grace_period"]
 
     with cols[1]:
         speaker_backend_options = ["sounddevice", "unitree_g1"]
@@ -446,26 +450,61 @@ def s2s_tab(config: dict[str, Any]) -> None:
             index=tts_options.index(s2s["tts"]),
         )
         tts["vendor"] = "DoubaoTTS" if s2s["tts"] == "doubao" else "KokoroTTS"
-        tts["voice"] = select_option(
-            "Kokoro voice",
-            KOKORO_VOICE_OPTIONS,
-            tts.get("voice", "af_sarah"),
-        )
-        s2s["whisper_model"] = select_option(
-            "Local/FasterWhisper model",
-            WHISPER_MODEL_OPTIONS,
-            s2s["whisper_model"],
-        )
-        asr["transcription_model_name"] = s2s["whisper_model"]
-        s2s["openai_whisper_model"] = st.text_input(
-            "OpenAI ASR model", s2s["openai_whisper_model"]
-        )
-        s2s["openai_base_url"] = st.text_input(
-            "OpenAI ASR base URL override", s2s.get("openai_base_url", "")
-        )
         s2s["stream_response"] = st.checkbox(
             "Stream LLM response to TTS", value=bool(s2s["stream_response"])
         )
+
+    with st.expander("Advanced speech settings"):
+        advanced_cols = st.columns(2)
+        with advanced_cols[0]:
+            s2s["sample_rate"] = st.number_input(
+                "Sample rate",
+                min_value=8000,
+                max_value=48000,
+                value=int(s2s["sample_rate"]),
+                step=1000,
+            )
+            s2s["block_size"] = st.number_input(
+                "Block size",
+                min_value=160,
+                max_value=8192,
+                value=int(s2s["block_size"]),
+                step=160,
+            )
+            s2s["vad_threshold"] = st.slider(
+                "VAD threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(s2s["vad_threshold"]),
+            )
+            asr["vad_threshold"] = s2s["vad_threshold"]
+            s2s["grace_period"] = st.number_input(
+                "Silence grace period",
+                min_value=0.1,
+                max_value=5.0,
+                value=float(s2s["grace_period"]),
+                step=0.1,
+            )
+            asr["silence_grace_period"] = s2s["grace_period"]
+
+        with advanced_cols[1]:
+            tts["voice"] = select_option(
+                "Kokoro voice",
+                KOKORO_VOICE_OPTIONS,
+                tts.get("voice", "af_sarah"),
+            )
+            s2s["whisper_model"] = select_option(
+                "Local/FasterWhisper model",
+                WHISPER_MODEL_OPTIONS,
+                s2s["whisper_model"],
+            )
+            asr["transcription_model_name"] = s2s["whisper_model"]
+            s2s["openai_whisper_model"] = st.text_input(
+                "OpenAI ASR model", s2s["openai_whisper_model"]
+            )
+            s2s["openai_base_url"] = st.text_input(
+                "OpenAI ASR base URL override", s2s.get("openai_base_url", "")
+            )
 
     with st.expander("Doubao Speech API", expanded=s2s["asr"] == "doubao" or s2s["tts"] == "doubao"):
         doubao["app_id"] = st.text_input(
@@ -556,6 +595,7 @@ def tools_tab(config: dict[str, Any]) -> None:
     st.subheader("Tools")
     tools = config["tools"]
     unitree_g1 = config["unitree_g1"]
+    sensor_tool = config["sensor_tool"]
     ros2 = config["ros2"]
     env = st.session_state.env
     tools["python_tools"] = st.checkbox(
@@ -569,15 +609,19 @@ def tools_tab(config: dict[str, Any]) -> None:
         value=bool(unitree_g1["tools_enabled"]),
     )
     enabled_unitree_tools = set(
-        unitree_g1.get("enabled_tools", ["stop", "move", "posture", "gesture"])
+        unitree_g1.get(
+            "enabled_tools",
+            ["stop", "move", "posture", "gesture", "arm_action"],
+        )
     )
     st.caption("Choose which Unitree tools are exposed to the agent.")
-    tool_cols = st.columns(4)
+    tool_cols = st.columns(5)
     unitree_tool_options = [
         ("stop", "Stop"),
         ("move", "Move"),
         ("posture", "Posture"),
         ("gesture", "Gesture"),
+        ("arm_action", "Arm actions"),
     ]
     selected_unitree_tools: list[str] = []
     for col, (tool_name, label) in zip(tool_cols, unitree_tool_options):
@@ -603,6 +647,51 @@ def tools_tab(config: dict[str, Any]) -> None:
     )
     env["UNITREE_G1_NETWORK_INTERFACE"] = unitree_g1["network_interface"]
     env["UNITREE_G1_ENABLE_CONTROL"] = str(unitree_g1["control_enabled"]).lower()
+
+    st.divider()
+    st.subheader("Sensor Tools")
+    sensor_tool["enabled"] = st.checkbox(
+        "Enable camera sensor tools",
+        value=bool(sensor_tool.get("enabled", False)),
+    )
+    sensor_tool["transport"] = st.selectbox(
+        "Camera transport",
+        ["zmq", "http"],
+        index=["zmq", "http"].index(sensor_tool.get("transport", "zmq")),
+    )
+    if sensor_tool["transport"] == "zmq":
+        sensor_tool["server_ip"] = st.text_input(
+            "Sensor server IP",
+            sensor_tool.get("server_ip", "localhost"),
+        )
+        sensor_tool["port"] = int(
+            st.number_input(
+                "Sensor server port",
+                min_value=1,
+                max_value=65535,
+                value=int(sensor_tool.get("port", 5555)),
+                step=1,
+            )
+        )
+    else:
+        sensor_tool["http_base_url"] = st.text_input(
+            "HTTP camera base URL",
+            sensor_tool.get("http_base_url", ""),
+            help="Example: http://robot:8000",
+        )
+    sensor_tool["default_camera"] = st.text_input(
+        "Default camera",
+        sensor_tool.get("default_camera", ""),
+        help="Optional: ego_view, head, left_wrist, or right_wrist.",
+    )
+    sensor_tool["blocking"] = st.checkbox(
+        "Wait for fresh frames",
+        value=bool(sensor_tool.get("blocking", True)),
+    )
+    env["SENSOR_SERVER_IP"] = sensor_tool.get("server_ip", "")
+    env["SENSOR_SERVER_PORT"] = str(sensor_tool.get("port", 5555))
+    env["SENSOR_HTTP_BASE_URL"] = sensor_tool.get("http_base_url", "")
+    env["SENSOR_DEFAULT_CAMERA"] = sensor_tool.get("default_camera", "")
 
     st.divider()
     st.subheader("ROS2 Tools")
@@ -662,6 +751,16 @@ def preview_tab(config: dict[str, Any]) -> None:
         enabled_tools = ",".join(config["unitree_g1"].get("enabled_tools", []))
         if enabled_tools:
             command.append(f"--unitree-g1-enabled-tools {enabled_tools}")
+    if config.get("sensor_tool", {}).get("enabled"):
+        command.append("--sensor-tools")
+        command.append(f"--sensor-transport {config['sensor_tool']['transport']}")
+        if config["sensor_tool"]["transport"] == "zmq":
+            command.append(f"--sensor-server-ip {config['sensor_tool']['server_ip']}")
+            command.append(f"--sensor-server-port {config['sensor_tool']['port']}")
+        else:
+            command.append(f"--sensor-http-base-url {config['sensor_tool']['http_base_url']}")
+        if config["sensor_tool"].get("default_camera"):
+            command.append(f"--sensor-default-camera {config['sensor_tool']['default_camera']}")
     st.code(" ".join(command), language="bash")
 
 

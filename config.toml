@@ -63,6 +63,7 @@ enabled_tools = [
     "move",
     "posture",
     "gesture",
+    "arm_action",
 ]
 network_interface = ""
 control_enabled = false
@@ -73,6 +74,15 @@ network_interface = ""
 app_name = "rai_s2s"
 chunk_size = 96000
 stop_after_play = false
+
+[sensor_tool]
+enabled = false
+transport = "zmq"
+server_ip = "localhost"
+port = 5555
+http_base_url = ""
+default_camera = ""
+blocking = true
 
 [ros2]
 ros2_tools = false

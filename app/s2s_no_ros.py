@@ -34,7 +34,7 @@ from langchain_core.tools import BaseTool
 from rai.agents.langchain import ReActAgent
 from rai.communication.hri_connector import HRIConnector, HRIMessage
 from rai.initialization.model_initialization import get_llm_model, load_config
-from rai.tools.python import get_basic_tools, get_unitree_g1_tools
+from rai.tools.python import get_basic_tools, get_sensor_tools, get_unitree_g1_tools
 
 from rai_s2s.asr.models import (
     BaseTranscriptionModel,
@@ -58,6 +58,9 @@ such as "stop", "停止", and "停下" as urgent and call the stop tool immediat
 Never claim that a physical action was performed unless the corresponding tool
 completed successfully. If a required tool is unavailable or fails, clearly say
 that the action was not performed.
+
+When the user asks about the robot's surroundings, what the robot can see, or a
+visual inspection task, use the sensor camera tool if it is available.
 
 Ask for clarification before acting when a physical command is ambiguous. Refuse
 unsafe physical actions, but do not add unnecessary warnings to ordinary,
@@ -110,6 +113,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
     ros2 = raw_config.get("ros2", {})
     unitree_g1 = raw_config.get("unitree_g1", {})
     unitree_g1_audio = raw_config.get("unitree_g1_audio", {})
+    sensor_tool = raw_config.get("sensor_tool", {})
     openai = raw_config.get("openai", {})
     tts = raw_config.get("tts", {})
     doubao = raw_config.get("doubao_speech", {})
@@ -148,7 +152,10 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         "python_tools": tools.get("python_tools", False),
         "unitree_g1_tools": unitree_g1.get("tools_enabled", False),
         "unitree_g1_enabled_tools": ",".join(
-            unitree_g1.get("enabled_tools", ["stop", "move", "posture", "gesture"])
+            unitree_g1.get(
+                "enabled_tools",
+                ["stop", "move", "posture", "gesture", "arm_action"],
+            )
         ),
         "unitree_g1_network_interface": unitree_g1.get("network_interface", ""),
         "unitree_g1_control_enabled": unitree_g1.get("control_enabled", False),
@@ -157,6 +164,13 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         "unitree_g1_audio_app_name": unitree_g1_audio.get("app_name", "rai_s2s"),
         "unitree_g1_audio_chunk_size": unitree_g1_audio.get("chunk_size", 96000),
         "unitree_g1_audio_stop_after_play": unitree_g1_audio.get("stop_after_play", False),
+        "sensor_tools": sensor_tool.get("enabled", False),
+        "sensor_transport": sensor_tool.get("transport", "zmq"),
+        "sensor_server_ip": sensor_tool.get("server_ip", "localhost"),
+        "sensor_server_port": sensor_tool.get("port", 5555),
+        "sensor_http_base_url": sensor_tool.get("http_base_url", ""),
+        "sensor_default_camera": sensor_tool.get("default_camera", ""),
+        "sensor_blocking": sensor_tool.get("blocking", True),
         "ros2_tools": ros2.get("ros2_tools", False),
         "nav2_tools": ros2.get("nav2_tools", False),
         "ros2_readable": ros2.get("ros2_readable") or None,
@@ -412,7 +426,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--unitree-g1-enabled-tools",
         default=None,
-        help="Comma-separated Unitree G1 tools to enable: stop,move,posture,gesture",
+        help=(
+            "Comma-separated Unitree G1 tools to enable: "
+            "stop,move,posture,gesture,arm_action"
+        ),
     )
     parser.add_argument(
         "--unitree-g1-control-enabled",
@@ -447,6 +464,45 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Call PlayStop after each generated utterance",
+    )
+    parser.add_argument(
+        "--sensor-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable camera sensor tools for the text agent",
+    )
+    parser.add_argument(
+        "--sensor-transport",
+        choices=["zmq", "http"],
+        default=None,
+        help="Camera sensor transport (default: [sensor_tool].transport)",
+    )
+    parser.add_argument(
+        "--sensor-server-ip",
+        default=None,
+        help="ZMQ camera sensor server IP (default: [sensor_tool].server_ip)",
+    )
+    parser.add_argument(
+        "--sensor-server-port",
+        type=int,
+        default=None,
+        help="ZMQ camera sensor server port (default: [sensor_tool].port)",
+    )
+    parser.add_argument(
+        "--sensor-http-base-url",
+        default=None,
+        help="HTTP MJPEG camera base URL, e.g. http://robot:8000",
+    )
+    parser.add_argument(
+        "--sensor-default-camera",
+        default=None,
+        help="Default camera name for sensor tools, e.g. ego_view",
+    )
+    parser.add_argument(
+        "--sensor-blocking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Wait for a fresh camera frame when using sensor tools",
     )
     parser.add_argument(
         "--ros2-tools",
@@ -509,6 +565,17 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 network_interface=args.unitree_g1_network_interface,
                 control_enabled=args.unitree_g1_control_enabled,
                 enabled_tools=_parse_csv(args.unitree_g1_enabled_tools),
+            )
+        )
+    if args.sensor_tools:
+        tools.extend(
+            get_sensor_tools(
+                transport=args.sensor_transport,
+                server_ip=args.sensor_server_ip,
+                port=args.sensor_server_port,
+                http_base_url=args.sensor_http_base_url,
+                default_camera=args.sensor_default_camera,
+                blocking=args.sensor_blocking,
             )
         )
 

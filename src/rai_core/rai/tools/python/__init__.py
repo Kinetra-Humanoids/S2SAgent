@@ -15,4 +15,5 @@
 from .basic import calculate as calculate
 from .basic import get_basic_tools as get_basic_tools
 from .basic import get_current_time as get_current_time
+from .sensor_tool import get_sensor_tools as get_sensor_tools
 from .unitree_g1 import get_unitree_g1_tools as get_unitree_g1_tools

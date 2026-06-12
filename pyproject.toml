@@ -6,6 +6,10 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "rai_core",
     "rai_s2s",
+    "msgpack>=1.0,<2.0",
+    "msgpack-numpy>=0.4.8,<0.5.0",
+    "opencv-python>=4.8,<5.0",
+    "pyzmq>=25.0,<28.0",
     "streamlit>=1.44,<2.0.0",
 ]
 
