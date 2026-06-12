@@ -69,14 +69,32 @@ class ToolRunner(RunnableCallable):
         if not isinstance(message, AIMessage):
             raise ValueError("Last message is not an AIMessage")
 
+        def format_tool_args(args: Any) -> str:
+            try:
+                return json.dumps(args, ensure_ascii=False, indent=2)
+            except TypeError:
+                return str(args)
+
         def run_one(call: ToolCall):
             self.logger.info(f"Running tool: {call['name']}, args: {call['args']}")
+            print(
+                f"\n[Tool Call] {call['name']}\nArgs:\n{format_tool_args(call['args'])}",
+                flush=True,
+            )
             artifact = None
 
             try:
                 ts = time.perf_counter()
                 output = self.tools_by_name[call["name"]].invoke(call, config)  # type: ignore
                 te = time.perf_counter() - ts
+                output_preview = str(output.content)
+                if len(output_preview) > 500:
+                    output_preview = output_preview[:500] + "..."
+                print(
+                    f"[Tool Done] {call['name']} completed in {te:.2f}s\n"
+                    f"Output:\n{output_preview}\n",
+                    flush=True,
+                )
                 self.logger.info(
                     f"Tool {call['name']} completed in {te:.2f} seconds. Tool output: {str(output.content)[:100]}{'...' if len(str(output.content)) > 100 else ''}"
                 )
@@ -98,6 +116,10 @@ class ToolRunner(RunnableCallable):
                                     {json.dumps(errors, indent=2)}
                                 """
                 self.logger.info(error_message)
+                print(
+                    f"[Tool Error] {call['name']} validation failed:\n{error_message}",
+                    flush=True,
+                )
                 output = ToolMessage(
                     content=error_message,
                     name=call["name"],
@@ -106,6 +128,7 @@ class ToolRunner(RunnableCallable):
                 )
             except Exception as e:
                 self.logger.info(f'Error in "{call["name"]}", error: {e}')
+                print(f"[Tool Error] {call['name']}: {e}", flush=True)
                 output = ToolMessage(
                     content=f"Failed to run tool. Error: {e}",
                     name=call["name"],
