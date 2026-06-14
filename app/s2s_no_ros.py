@@ -262,6 +262,9 @@ class LocalS2SAgent(SpeechToSpeechAgent):
                 data = self.text_queues[self.current_transcription_id].get(block=False)
             except Empty:
                 continue
+            if data.strip() == "":
+                self.logger.debug("Skipping empty Unitree G1 TTS input.")
+                continue
             try:
                 self.logger.info("Generating Unitree G1 speech: %s", data)
                 print(f"[Unitree Audio] TTS input: {data}", flush=True)

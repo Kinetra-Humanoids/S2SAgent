@@ -277,6 +277,9 @@ class SpeechToSpeechAgent(BaseAgent):
 
     def _on_to_human_message(self, message: HRIMessage):
         self.logger.info(f"Receieved message from human: {message.text}")
+        if message.text.strip() == "":
+            self.logger.debug("Ignoring empty message from HRI connector.")
+            return
         self.logger.warning(
             f"Starting playback, current id: {self.current_transcription_id}"
         )

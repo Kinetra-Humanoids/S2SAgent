@@ -51,6 +51,9 @@ class HRICallbackHandler(BaseCallbackHandler):
         return token in self.splitting_chars
 
     def _send_all_targets(self, tokens: str, done: bool = False):
+        if tokens.strip() == "":
+            self.logger.debug("Skipping empty HRI callback payload.")
+            return
         for target, connector in self.connectors.items():
             self.logger.info(f"Sending {len(tokens)} tokens to target: {target}")
             try:

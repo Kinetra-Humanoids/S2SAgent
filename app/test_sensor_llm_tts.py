@@ -15,6 +15,7 @@ import argparse
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import sounddevice as sd
@@ -103,10 +104,16 @@ def call_sensor_tool(args: argparse.Namespace, raw_config: dict[str, Any]):
         blocking=not args.no_blocking and sensor_cfg.get("blocking", True),
     )[0]
     print(f"[Test] Calling sensor tool: {tool.name}", flush=True)
-    result = tool.invoke(
-        {
+    tool_args = {
             "camera_name": args.camera_name or "",
             "blocking": not args.no_blocking and sensor_cfg.get("blocking", True),
+        }
+    result = tool.invoke(
+        {
+            "name": tool.name,
+            "args": tool_args,
+            "id": f"test_sensor_{uuid4().hex}",
+            "type": "tool_call",
         }
     )
     content, artifact = _as_tool_result(result)
