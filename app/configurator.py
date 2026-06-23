@@ -135,6 +135,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_start": True,
         "start_control": True,
         "startup_settle_seconds": 2.0,
+        "terminal_viewer": False,
+        "log_dir": "logs/unitree_g1_sim",
         "enabled_tools": [
             "start",
             "stop",
@@ -274,6 +276,9 @@ def save_env(values: dict[str, str]) -> None:
         f'GR00T_WBC_ROOT="{existing.get("GR00T_WBC_ROOT", "")}"',
         "UNITREE_G1_SIM_REPLAY_DIR="
         f'"{existing.get("UNITREE_G1_SIM_REPLAY_DIR", "replays/unitree_g1_sim")}"',
+        "UNITREE_G1_SIM_TERMINAL_VIEWER="
+        f'"{existing.get("UNITREE_G1_SIM_TERMINAL_VIEWER", "false")}"',
+        f'UNITREE_G1_SIM_LOG_DIR="{existing.get("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim")}"',
         "",
     ]
     ENV_PATH.write_text("\n".join(lines), encoding="utf-8")
@@ -322,7 +327,6 @@ def disable_sim_tools_when_sdk_enabled() -> None:
 def disable_sdk_tools_when_sim_enabled() -> None:
     if st.session_state.get("unitree_g1_sim_tools_enabled", False):
         st.session_state.unitree_g1_tools_enabled = False
-
 
 def model_tab(config: dict[str, Any]) -> None:
     st.subheader("Model Provider")
@@ -747,6 +751,19 @@ def tools_tab(config: dict[str, Any]) -> None:
             value=float(unitree_g1_sim.get("startup_settle_seconds", 2.0)),
             step=0.5,
         )
+    sim_terminal_cols = st.columns(2)
+    with sim_terminal_cols[0]:
+        unitree_g1_sim["terminal_viewer"] = st.checkbox(
+            "Open terminal viewer",
+            value=bool(unitree_g1_sim.get("terminal_viewer", False)),
+            help="Open a terminal window that tails manager/replay logs.",
+        )
+    with sim_terminal_cols[1]:
+        unitree_g1_sim["log_dir"] = st.text_input(
+            "Terminal log directory",
+            value=unitree_g1_sim.get("log_dir", "logs/unitree_g1_sim")
+            or env.get("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim"),
+        )
     enabled_sim_tools = set(
         unitree_g1_sim.get(
             "enabled_tools",
@@ -799,6 +816,18 @@ def tools_tab(config: dict[str, Any]) -> None:
     env["UNITREE_G1_SIM_DEPLOY_DIR"] = unitree_g1_sim["deploy_dir"]
     env["GR00T_WBC_ROOT"] = unitree_g1_sim["gr00t_root"]
     env["UNITREE_G1_SIM_REPLAY_DIR"] = unitree_g1_sim["replay_dir"]
+    env["UNITREE_G1_SIM_TERMINAL_VIEWER"] = str(
+        unitree_g1_sim["terminal_viewer"]
+    ).lower()
+    env["UNITREE_G1_SIM_LOG_DIR"] = unitree_g1_sim["log_dir"]
+    with st.expander(
+        "Terminal commands for Unitree G1 sim",
+        expanded=bool(unitree_g1_sim.get("tools_enabled", False)),
+    ):
+        st.code(
+            build_unitree_g1_sim_terminal_commands(unitree_g1_sim),
+            language="bash",
+        )
 
     st.divider()
     st.subheader("Sensor Tools")
@@ -922,6 +951,11 @@ def preview_tab(config: dict[str, Any]) -> None:
             command.append("--no-unitree-g1-sim-start-control")
         settle_seconds = config["unitree_g1_sim"].get("startup_settle_seconds", 2.0)
         command.append(f"--unitree-g1-sim-startup-settle-seconds {settle_seconds}")
+        if config["unitree_g1_sim"].get("terminal_viewer", False):
+            command.append("--unitree-g1-sim-terminal-viewer")
+        if config["unitree_g1_sim"].get("log_dir"):
+            log_dir = shlex.quote(config["unitree_g1_sim"]["log_dir"])
+            command.append(f"--unitree-g1-sim-log-dir {log_dir}")
         enabled_sim_tools = ",".join(
             config["unitree_g1_sim"].get("enabled_tools", [])
         )

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import tomli
 
+from rai.tools.python.unitree_g1_sim import _resolve_replay_file
 from rai.tools.python import (
     get_unitree_g1_sim_tools,
     start_unitree_g1_sim_manager,
@@ -115,7 +117,27 @@ def find_tool(tools, name: str):
     raise RuntimeError(f"Tool not found: {name}")
 
 
+def print_shell_command(label: str, cwd: str | Path, command: str) -> None:
+    print(f"[Sim Replay Test] {label}:")
+    print(f"  cd {Path(cwd).expanduser().resolve()}")
+    print(f"  {command}")
+
+
+def build_manager_command() -> str:
+    return "source scripts/setup_env.sh && bash deploy.sh --input-type manager sim"
+
+
+def build_replay_command(latent_input_file: Path) -> str:
+    return (
+        "source .venv_teleop/bin/activate && "
+        "python gear_sonic/scripts/sonic_encoder_input_player.py "
+        f"--latent-input-file {shlex.quote(str(latent_input_file))}"
+    )
+
+
 def invoke_tool(tool, args: dict[str, Any]) -> Any:
+    print(f"[Sim Replay Test] Tool call: {tool.name}")
+    print(f"  args: {args}")
     return tool.invoke(
         {
             "name": tool.name,
@@ -163,7 +185,13 @@ def main() -> int:
     print(f"  replay_dir: {replay_dir}")
 
     if not args.no_auto_start:
+        print_shell_command(
+            "Manager command executed by startup/tool backend",
+            deploy_dir,
+            build_manager_command(),
+        )
         print("[Sim Replay Test] Starting manager sim and entering control mode...")
+        print("[Sim Replay Test] Manager hotkey after startup: ']'")
         startup_message = start_unitree_g1_sim_manager(
             deploy_dir=deploy_dir,
             start_control=True,
@@ -184,6 +212,16 @@ def main() -> int:
 
     replay_tool = find_tool(tools, "unitree_g1_sim_perform_replay")
     print(f"[Sim Replay Test] Performing replay: {args.action}")
+    replay_file = _resolve_replay_file(replay_dir, args.action)
+    print("[Sim Replay Test] Replay tool hotkeys:")
+    print("  before replay: '#' then ENTER")
+    if not args.no_return_to_keyboard:
+        print("  after replay: '!'")
+    print_shell_command(
+        "Replay command executed by unitree_g1_sim_perform_replay",
+        gr00t_root,
+        build_replay_command(replay_file),
+    )
     result = invoke_tool(
         replay_tool,
         {

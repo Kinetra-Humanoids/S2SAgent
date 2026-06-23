@@ -220,6 +220,14 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
             "startup_settle_seconds",
             2.0,
         ),
+        "unitree_g1_sim_terminal_viewer": unitree_g1_sim.get(
+            "terminal_viewer",
+            False,
+        ),
+        "unitree_g1_sim_log_dir": unitree_g1_sim.get(
+            "log_dir",
+            "logs/unitree_g1_sim",
+        ),
         "unitree_g1_sim_enabled_tools": ",".join(
             unitree_g1_sim.get(
                 "enabled_tools",
@@ -592,6 +600,17 @@ def parse_args() -> argparse.Namespace:
         help="Delay between manager sim start and sending `]`",
     )
     parser.add_argument(
+        "--unitree-g1-sim-terminal-viewer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Open a terminal window that tails Unitree G1 sim tool logs",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-log-dir",
+        default=None,
+        help="Directory for Unitree G1 sim manager/replay terminal logs",
+    )
+    parser.add_argument(
         "--unitree-g1-sim-enabled-tools",
         default=None,
         help=(
@@ -737,6 +756,8 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 gr00t_root=args.unitree_g1_sim_gr00t_root,
                 replay_dir=args.unitree_g1_sim_replay_dir,
                 enabled_tools=_parse_csv(args.unitree_g1_sim_enabled_tools),
+                terminal_viewer=args.unitree_g1_sim_terminal_viewer,
+                log_dir=args.unitree_g1_sim_log_dir,
             )
         )
     if args.sensor_tools:
@@ -811,6 +832,8 @@ def main() -> int:
                 deploy_dir=args.unitree_g1_sim_deploy_dir,
                 start_control=args.unitree_g1_sim_start_control,
                 settle_seconds=args.unitree_g1_sim_startup_settle_seconds,
+                terminal_viewer=args.unitree_g1_sim_terminal_viewer,
+                log_dir=args.unitree_g1_sim_log_dir,
             )
             logging.info("Unitree G1 sim manager startup:\n%s", startup_message)
         except Exception:

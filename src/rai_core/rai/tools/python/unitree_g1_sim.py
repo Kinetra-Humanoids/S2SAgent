@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import platform
 import pty
 import select
 import shlex
@@ -104,21 +106,81 @@ COMPLIANCE_ACTIONS = {
 }
 
 
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_name(name: str) -> str:
     return name.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _default_log_dir() -> Path:
+    return Path(os.getenv("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim"))
+
+
+def _launch_terminal_tail(log_path: Path, title: str) -> str:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch(exist_ok=True)
+    tail_command = f"tail -n 200 -f {shlex.quote(str(log_path))}"
+    system = platform.system().lower()
+
+    if system == "darwin":
+        script = (
+            'tell application "Terminal"\n'
+            "  activate\n"
+            f"  do script {json.dumps(tail_command)}\n"
+            "end tell"
+        )
+        subprocess.Popen(["osascript", "-e", script])
+        return f"Opened Terminal tailing {log_path}"
+
+    candidates = [
+        ["gnome-terminal", "--title", title, "--", "bash", "-lc", tail_command],
+        ["konsole", "--new-tab", "-p", f"tabtitle={title}", "-e", "bash", "-lc", tail_command],
+        ["xfce4-terminal", "--title", title, "--command", f"bash -lc {shlex.quote(tail_command)}"],
+        ["xterm", "-T", title, "-e", "bash", "-lc", tail_command],
+    ]
+    for command in candidates:
+        try:
+            subprocess.Popen(command)
+            return f"Opened terminal tailing {log_path}"
+        except FileNotFoundError:
+            continue
+    raise RuntimeError(
+        "No supported terminal emulator found. Install gnome-terminal, konsole, "
+        "xfce4-terminal, or xterm, or tail the log manually: "
+        f"tail -f {log_path}"
+    )
 
 
 class UnitreeG1SimManager:
     """Owns the GR00T WBC manager process and sends terminal key presses."""
 
-    def __init__(self, deploy_dir: str = ""):
+    def __init__(
+        self,
+        deploy_dir: str = "",
+        *,
+        terminal_viewer: bool = False,
+        log_dir: str | None = None,
+    ):
         self.deploy_dir = deploy_dir
+        self.terminal_viewer = terminal_viewer
+        self.log_dir = Path(log_dir).expanduser() if log_dir else _default_log_dir()
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
         self._master_fd: int | None = None
         self._reader_thread: threading.Thread | None = None
         self._logs: deque[str] = deque(maxlen=240)
         self._started_at: float | None = None
+        self._log_path: Path | None = None
+        self._terminal_started = False
+
+    def configure(self, *, terminal_viewer: bool, log_dir: str | None = None) -> None:
+        self.terminal_viewer = terminal_viewer
+        if log_dir:
+            self.log_dir = Path(log_dir).expanduser()
 
     def start(self, deploy_dir: str = "", extra_args: str = "") -> str:
         with self._lock:
@@ -151,8 +213,22 @@ class UnitreeG1SimManager:
             ]
 
             self._logs.clear()
+            self._terminal_started = False
+            self._log_path = self.log_dir / "manager.log"
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_path.write_text("", encoding="utf-8")
             self._append_log(f"$ cd {cwd}")
             self._append_log("$ " + command[-1])
+            terminal_message = ""
+            if self.terminal_viewer:
+                try:
+                    terminal_message = "\n" + _launch_terminal_tail(
+                        self._log_path,
+                        "Unitree G1 Sim Manager",
+                    )
+                    self._terminal_started = True
+                except Exception as exc:
+                    terminal_message = f"\nCould not open terminal viewer: {exc}"
             self._process = subprocess.Popen(
                 command,
                 cwd=str(cwd),
@@ -174,6 +250,7 @@ class UnitreeG1SimManager:
                 "Started GR00T WBC manager sim: "
                 f"pid={self._process.pid}, command={command[-1]}. "
                 "Use unitree_g1_sim_start_control to send ']' before motion commands."
+                f"{terminal_message}"
             )
 
     def ensure_started(
@@ -305,6 +382,9 @@ class UnitreeG1SimManager:
 
     def _append_log(self, line: str) -> None:
         self._logs.append(line[-500:])
+        if self._log_path is not None:
+            with self._log_path.open("a", encoding="utf-8") as file:
+                file.write(line + "\n")
 
     def _close_master_fd(self) -> None:
         if self._master_fd is not None:
@@ -318,14 +398,28 @@ class UnitreeG1SimManager:
 class UnitreeG1SimReplayPlayer:
     """Runs sonic_encoder_input_player.py in a separate shell process."""
 
-    def __init__(self, gr00t_root: str = ""):
+    def __init__(
+        self,
+        gr00t_root: str = "",
+        *,
+        terminal_viewer: bool = False,
+        log_dir: str | None = None,
+    ):
         self.gr00t_root = gr00t_root
+        self.terminal_viewer = terminal_viewer
+        self.log_dir = Path(log_dir).expanduser() if log_dir else _default_log_dir()
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
         self._master_fd: int | None = None
         self._reader_thread: threading.Thread | None = None
         self._logs: deque[str] = deque(maxlen=240)
         self._started_at: float | None = None
+        self._log_path: Path | None = None
+
+    def configure(self, *, terminal_viewer: bool, log_dir: str | None = None) -> None:
+        self.terminal_viewer = terminal_viewer
+        if log_dir:
+            self.log_dir = Path(log_dir).expanduser()
 
     def play(
         self,
@@ -358,8 +452,20 @@ class UnitreeG1SimReplayPlayer:
             )
             master_fd, slave_fd = pty.openpty()
             self._logs.clear()
+            self._log_path = self.log_dir / "replay_player.log"
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_path.write_text("", encoding="utf-8")
             self._append_log(f"$ cd {cwd}")
             self._append_log("$ " + command)
+            terminal_message = ""
+            if self.terminal_viewer:
+                try:
+                    terminal_message = "\n" + _launch_terminal_tail(
+                        self._log_path,
+                        "Unitree G1 Replay Player",
+                    )
+                except Exception as exc:
+                    terminal_message = f"\nCould not open terminal viewer: {exc}"
             self._process = subprocess.Popen(
                 ["bash", "-lc", command],
                 cwd=str(cwd),
@@ -380,6 +486,7 @@ class UnitreeG1SimReplayPlayer:
             started = (
                 f"Started replay player: pid={self._process.pid}, "
                 f"latent_input_file={latent_input_file}"
+                f"{terminal_message}"
             )
         if not wait:
             return started
@@ -452,6 +559,9 @@ class UnitreeG1SimReplayPlayer:
 
     def _append_log(self, line: str) -> None:
         self._logs.append(line[-500:])
+        if self._log_path is not None:
+            with self._log_path.open("a", encoding="utf-8") as file:
+                file.write(line + "\n")
 
     def _close_master_fd(self) -> None:
         if self._master_fd is not None:
@@ -468,23 +578,51 @@ _PLAYERS: dict[str, UnitreeG1SimReplayPlayer] = {}
 _PLAYERS_LOCK = threading.Lock()
 
 
-def _get_manager(deploy_dir: str) -> UnitreeG1SimManager:
+def _get_manager(
+    deploy_dir: str,
+    *,
+    terminal_viewer: bool | None = None,
+    log_dir: str | None = None,
+) -> UnitreeG1SimManager:
     key = deploy_dir or os.getenv("UNITREE_G1_SIM_DEPLOY_DIR", "")
+    viewer = _as_bool(os.getenv("UNITREE_G1_SIM_TERMINAL_VIEWER"), False)
+    if terminal_viewer is not None:
+        viewer = terminal_viewer
     with _MANAGERS_LOCK:
         manager = _MANAGERS.get(key)
         if manager is None:
-            manager = UnitreeG1SimManager(key)
+            manager = UnitreeG1SimManager(
+                key,
+                terminal_viewer=viewer,
+                log_dir=log_dir,
+            )
             _MANAGERS[key] = manager
+        else:
+            manager.configure(terminal_viewer=viewer, log_dir=log_dir)
         return manager
 
 
-def _get_player(gr00t_root: str) -> UnitreeG1SimReplayPlayer:
+def _get_player(
+    gr00t_root: str,
+    *,
+    terminal_viewer: bool | None = None,
+    log_dir: str | None = None,
+) -> UnitreeG1SimReplayPlayer:
     key = gr00t_root or os.getenv("GR00T_WBC_ROOT", "")
+    viewer = _as_bool(os.getenv("UNITREE_G1_SIM_TERMINAL_VIEWER"), False)
+    if terminal_viewer is not None:
+        viewer = terminal_viewer
     with _PLAYERS_LOCK:
         player = _PLAYERS.get(key)
         if player is None:
-            player = UnitreeG1SimReplayPlayer(key)
+            player = UnitreeG1SimReplayPlayer(
+                key,
+                terminal_viewer=viewer,
+                log_dir=log_dir,
+            )
             _PLAYERS[key] = player
+        else:
+            player.configure(terminal_viewer=viewer, log_dir=log_dir)
         return player
 
 
@@ -506,8 +644,14 @@ def start_unitree_g1_sim_manager(
     extra_args: str = "",
     start_control: bool = True,
     settle_seconds: float = 2.0,
+    terminal_viewer: bool | None = None,
+    log_dir: str | None = None,
 ) -> str:
-    manager = _get_manager(deploy_dir or "")
+    manager = _get_manager(
+        deploy_dir or "",
+        terminal_viewer=terminal_viewer,
+        log_dir=log_dir,
+    )
     return manager.ensure_started(
         deploy_dir=deploy_dir or "",
         extra_args=extra_args,
@@ -527,6 +671,8 @@ def get_unitree_g1_sim_tools(
     gr00t_root: str | None = None,
     replay_dir: str | None = None,
     enabled_tools: list[str] | None = None,
+    terminal_viewer: bool | None = None,
+    log_dir: str | None = None,
 ) -> list[BaseTool]:
     configured_deploy_dir = deploy_dir or os.getenv("UNITREE_G1_SIM_DEPLOY_DIR", "")
     configured_gr00t_root = gr00t_root or os.getenv("GR00T_WBC_ROOT", "")
@@ -538,10 +684,18 @@ def get_unitree_g1_sim_tools(
     active_deploy_dir = {"value": configured_deploy_dir}
 
     def manager() -> UnitreeG1SimManager:
-        return _get_manager(active_deploy_dir["value"])
+        return _get_manager(
+            active_deploy_dir["value"],
+            terminal_viewer=terminal_viewer,
+            log_dir=log_dir,
+        )
 
     def player() -> UnitreeG1SimReplayPlayer:
-        return _get_player(configured_gr00t_root)
+        return _get_player(
+            configured_gr00t_root,
+            terminal_viewer=terminal_viewer,
+            log_dir=log_dir,
+        )
 
     @tool
     def unitree_g1_sim_start_manager(
@@ -558,7 +712,11 @@ def get_unitree_g1_sim_tools(
         """
         target_deploy_dir = deploy_dir or configured_deploy_dir
         active_deploy_dir["value"] = target_deploy_dir
-        target_manager = _get_manager(target_deploy_dir)
+        target_manager = _get_manager(
+            target_deploy_dir,
+            terminal_viewer=terminal_viewer,
+            log_dir=log_dir,
+        )
         return target_manager.start(deploy_dir=deploy_dir, extra_args=extra_args)
 
     @tool
