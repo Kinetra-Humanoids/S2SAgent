@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip manager startup. Use only if this same process already started it.",
     )
     parser.add_argument(
+        "--no-confirm-deployment",
+        action="store_true",
+        help="Do not send Y/ENTER after starting deploy.sh.",
+    )
+    parser.add_argument(
         "--no-return-to-keyboard",
         action="store_true",
         help="Do not switch back to keyboard mode after replay exits.",
@@ -177,6 +182,9 @@ def main() -> int:
         if args.startup_settle_seconds is not None
         else sim_config.get("startup_settle_seconds", 2.0)
     )
+    confirm_deployment = bool(sim_config.get("confirm_deployment", True)) and not (
+        args.no_confirm_deployment
+    )
 
     print("[Sim Replay Test] Configuration:")
     print(f"  action: {args.action}")
@@ -191,9 +199,12 @@ def main() -> int:
             build_manager_command(),
         )
         print("[Sim Replay Test] Starting manager sim and entering control mode...")
+        if confirm_deployment:
+            print("[Sim Replay Test] Deployment confirmation after startup: 'Y' then ENTER")
         print("[Sim Replay Test] Manager hotkey after startup: ']'")
         startup_message = start_unitree_g1_sim_manager(
             deploy_dir=deploy_dir,
+            confirm_deployment=confirm_deployment,
             start_control=True,
             settle_seconds=float(startup_settle_seconds),
         )

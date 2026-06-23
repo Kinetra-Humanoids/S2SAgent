@@ -215,6 +215,10 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
             "replays/unitree_g1_sim",
         ),
         "unitree_g1_sim_auto_start": unitree_g1_sim.get("auto_start", True),
+        "unitree_g1_sim_confirm_deployment": unitree_g1_sim.get(
+            "confirm_deployment",
+            True,
+        ),
         "unitree_g1_sim_start_control": unitree_g1_sim.get("start_control", True),
         "unitree_g1_sim_startup_settle_seconds": unitree_g1_sim.get(
             "startup_settle_seconds",
@@ -588,6 +592,12 @@ def parse_args() -> argparse.Namespace:
         help="Auto-run deploy.sh manager sim when the agent starts",
     )
     parser.add_argument(
+        "--unitree-g1-sim-confirm-deployment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Send `Y` after starting deploy.sh to confirm deployment",
+    )
+    parser.add_argument(
         "--unitree-g1-sim-start-control",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -830,6 +840,7 @@ def main() -> int:
         try:
             startup_message = start_unitree_g1_sim_manager(
                 deploy_dir=args.unitree_g1_sim_deploy_dir,
+                confirm_deployment=args.unitree_g1_sim_confirm_deployment,
                 start_control=args.unitree_g1_sim_start_control,
                 settle_seconds=args.unitree_g1_sim_startup_settle_seconds,
                 terminal_viewer=args.unitree_g1_sim_terminal_viewer,

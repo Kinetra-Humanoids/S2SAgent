@@ -133,6 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "gr00t_root": "",
         "replay_dir": "replays/unitree_g1_sim",
         "auto_start": True,
+        "confirm_deployment": True,
         "start_control": True,
         "startup_settle_seconds": 2.0,
         "terminal_viewer": False,
@@ -777,18 +778,24 @@ def tools_tab(config: dict[str, Any]) -> None:
         value=unitree_g1_sim.get("replay_dir", "replays/unitree_g1_sim")
         or env.get("UNITREE_G1_SIM_REPLAY_DIR", "replays/unitree_g1_sim"),
     )
-    sim_start_cols = st.columns(3)
+    sim_start_cols = st.columns(4)
     with sim_start_cols[0]:
         unitree_g1_sim["auto_start"] = st.checkbox(
             "Auto-start manager",
             value=bool(unitree_g1_sim.get("auto_start", True)),
         )
     with sim_start_cols[1]:
+        unitree_g1_sim["confirm_deployment"] = st.checkbox(
+            "Send Y after start",
+            value=bool(unitree_g1_sim.get("confirm_deployment", True)),
+            help="Confirm the `Proceed with deployment` prompt.",
+        )
+    with sim_start_cols[2]:
         unitree_g1_sim["start_control"] = st.checkbox(
             "Send ] after start",
             value=bool(unitree_g1_sim.get("start_control", True)),
         )
-    with sim_start_cols[2]:
+    with sim_start_cols[3]:
         unitree_g1_sim["startup_settle_seconds"] = st.number_input(
             "Startup settle seconds",
             min_value=0.0,
@@ -992,6 +999,8 @@ def preview_tab(config: dict[str, Any]) -> None:
             command.append(f"--unitree-g1-sim-replay-dir {replay_dir}")
         if not config["unitree_g1_sim"].get("auto_start", True):
             command.append("--no-unitree-g1-sim-auto-start")
+        if not config["unitree_g1_sim"].get("confirm_deployment", True):
+            command.append("--no-unitree-g1-sim-confirm-deployment")
         if not config["unitree_g1_sim"].get("start_control", True):
             command.append("--no-unitree-g1-sim-start-control")
         settle_seconds = config["unitree_g1_sim"].get("startup_settle_seconds", 2.0)

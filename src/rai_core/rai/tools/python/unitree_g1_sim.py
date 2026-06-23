@@ -257,12 +257,19 @@ class UnitreeG1SimManager:
         self,
         deploy_dir: str = "",
         extra_args: str = "",
+        confirm_deployment: bool = True,
         start_control: bool = True,
         settle_seconds: float = 2.0,
     ) -> str:
         messages = [self.start(deploy_dir=deploy_dir, extra_args=extra_args)]
         if settle_seconds > 0:
             time.sleep(min(float(settle_seconds), 10.0))
+        if confirm_deployment:
+            self._require_running()
+            self._send_key("y")
+            self._send_key("\n")
+            messages.append("Sent deployment confirmation: Y")
+            time.sleep(1.0)
         if start_control:
             messages.append(self.send_key("]", "start_control"))
         return "\n".join(messages)
@@ -642,6 +649,7 @@ def start_unitree_g1_sim_manager(
     *,
     deploy_dir: str | None = None,
     extra_args: str = "",
+    confirm_deployment: bool = True,
     start_control: bool = True,
     settle_seconds: float = 2.0,
     terminal_viewer: bool | None = None,
@@ -655,6 +663,7 @@ def start_unitree_g1_sim_manager(
     return manager.ensure_started(
         deploy_dir=deploy_dir or "",
         extra_args=extra_args,
+        confirm_deployment=confirm_deployment,
         start_control=start_control,
         settle_seconds=settle_seconds,
     )
