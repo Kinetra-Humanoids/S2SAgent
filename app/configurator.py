@@ -319,6 +319,50 @@ def device_select(label: str, value: str, output: bool) -> str:
     return st.selectbox(label, devices, index=index)
 
 
+def build_unitree_g1_sim_terminal_commands(unitree_g1_sim: dict[str, Any]) -> str:
+    deploy_dir = unitree_g1_sim.get("deploy_dir", "")
+    gr00t_root = unitree_g1_sim.get("gr00t_root", "")
+    replay_dir = unitree_g1_sim.get("replay_dir", "replays/unitree_g1_sim")
+    log_dir = unitree_g1_sim.get("log_dir", "logs/unitree_g1_sim")
+    lines = [
+        "# 1. Start the MuJoCo sim loop separately from the GR00T repo root:",
+    ]
+    if gr00t_root:
+        lines.append(f"cd {shlex.quote(gr00t_root)}")
+    lines.extend(
+        [
+            "source .venv_sim/bin/activate",
+            "python gear_sonic/scripts/run_sim_loop.py",
+            "",
+            "# 2. The S2S tool backend starts the GR00T manager with:",
+        ]
+    )
+    if deploy_dir:
+        lines.append(f"cd {shlex.quote(deploy_dir)}")
+    lines.extend(
+        [
+            "source scripts/setup_env.sh",
+            "bash deploy.sh --input-type manager sim",
+            "",
+            "# 3. For replay actions, the backend runs:",
+        ]
+    )
+    if gr00t_root:
+        lines.append(f"cd {shlex.quote(gr00t_root)}")
+    lines.extend(
+        [
+            "source .venv_teleop/bin/activate",
+            "python gear_sonic/scripts/sonic_encoder_input_player.py \\",
+            f"  --latent-input-file {shlex.quote(str(Path(replay_dir) / 'wave_left_hand.npy'))}",
+            "",
+            "# 4. To watch backend terminal output manually:",
+            f"tail -f {shlex.quote(str(Path(log_dir) / 'manager.log'))}",
+            f"tail -f {shlex.quote(str(Path(log_dir) / 'replay_player.log'))}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def disable_sim_tools_when_sdk_enabled() -> None:
     if st.session_state.get("unitree_g1_tools_enabled", False):
         st.session_state.unitree_g1_sim_tools_enabled = False
@@ -327,6 +371,7 @@ def disable_sim_tools_when_sdk_enabled() -> None:
 def disable_sdk_tools_when_sim_enabled() -> None:
     if st.session_state.get("unitree_g1_sim_tools_enabled", False):
         st.session_state.unitree_g1_tools_enabled = False
+
 
 def model_tab(config: dict[str, Any]) -> None:
     st.subheader("Model Provider")
