@@ -38,7 +38,7 @@ use_langsmith = false
 host = "https://api.smith.langchain.com"
 
 [s2s]
-mic_device = "default"
+mic_device = "MacBook Pro Microphone"
 speaker_device = "default"
 speaker_backend = "sounddevice"
 asr = "doubao"
@@ -75,6 +75,29 @@ app_name = "rai_s2s"
 chunk_size = 96000
 stop_after_play = false
 
+[unitree_g1_sim]
+tools_enabled = false
+deploy_dir = ""
+gr00t_root = ""
+replay_dir = "replays/unitree_g1_sim"
+auto_start = true
+start_control = true
+startup_settle_seconds = 2.0
+enabled_tools = [
+    "start",
+    "stop",
+    "status",
+    "perform_replay",
+    "list_replays",
+    "switch_interface",
+    "start_control",
+    "toggle_planner",
+    "keyboard",
+    "select_mode",
+    "adjust",
+    "compliance",
+]
+
 [sensor_tool]
 enabled = false
 transport = "zmq"
@@ -96,7 +119,7 @@ nav2_frame_id = "map"
 nav2_action_name = "navigate_to_pose"
 
 [asr]
-recording_device_name = "default"
+recording_device_name = "MacBook Pro Microphone"
 transcription_model = "DoubaoASR"
 language = "zh"
 vad_model = "SileroVAD"

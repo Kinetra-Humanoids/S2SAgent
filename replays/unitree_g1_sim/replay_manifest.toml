@@ -1,0 +1,5 @@
+[replays.wave_left_hand]
+file = "wave_left_hand.npy"
+aliases = ["wave", "left_hand_wave"]
+description = "Wave the left hand."
+

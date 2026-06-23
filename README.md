@@ -172,3 +172,68 @@ uv run python app/test_doubao_unitree_g1_audio.py \
 
 Use `--no-play` to only verify Doubao synthesis and save
 `doubao_unitree_g1_test.wav`.
+
+## Optional Unitree G1 Sim Manager Tools
+
+The bundle can also expose GR00T WholeBodyControl manager controls as tools for
+the Unitree G1 MuJoCo sim. This toolset owns the C++ deployment terminal process
+and sends the same hotkeys documented by the GR00T manager tutorial.
+
+Start the MuJoCo sim loop separately from the GR00T repo root:
+
+```bash
+source .venv_sim/bin/activate
+python gear_sonic/scripts/run_sim_loop.py
+```
+
+Then enable `Unitree G1 Sim Manager Tools` in the configurator and set:
+
+- `GR00T deploy directory`: the `gear_sonic_deploy` directory containing
+  `deploy.sh`
+- `GR00T-WholeBodyControl root`: the repo root used to run
+  `gear_sonic/scripts/sonic_encoder_input_player.py`
+- `Replay .npy directory`: a directory containing latent replay files
+
+When the S2S agent starts with `--unitree-g1-sim-tools`, it automatically starts
+the deployment process and sends `]` to enter control mode:
+
+```bash
+bash deploy.sh --input-type manager sim
+```
+
+Command-line example:
+
+```bash
+uv run python app/s2s_no_ros.py \
+  --unitree-g1-sim-tools \
+  --unitree-g1-sim-deploy-dir /home/ljc/GR00T-WholeBodyControl/gear_sonic_deploy \
+  --unitree-g1-sim-gr00t-root /home/ljc/GR00T-WholeBodyControl \
+  --unitree-g1-sim-replay-dir replays/unitree_g1_sim
+```
+
+For named motions, put real latent `.npy` files in
+`replays/unitree_g1_sim/` or point `--unitree-g1-sim-replay-dir` to your own
+folder. Starter names are declared in
+`replays/unitree_g1_sim/replay_manifest.toml`:
+
+- `wave_left_hand.npy`
+- `run.npy`
+- `squat_stand.npy`
+
+The high-level `unitree_g1_sim_perform_replay` tool maps requests such as
+"wave left hand", "run", or "蹲起" to those files. It switches the manager to
+ZMQ mode (`#`), sends ENTER, then starts a separate shell process equivalent to:
+
+```bash
+cd /home/ljc/GR00T-WholeBodyControl
+source .venv_teleop/bin/activate
+python gear_sonic/scripts/sonic_encoder_input_player.py \
+  --latent-input-file /path/to/replays/unitree_g1_sim/wave_left_hand.npy
+```
+
+Lower-level tool groups are still available for process lifecycle (`start`,
+`stop`, `status`), manager interface switching (`keyboard`, `gamepad`, `zmq`,
+`ros2`), control startup (`]`), planner toggle (ENTER), keyboard motion
+commands (`WASD`, `T/R/P/N`, `Q/E`, `,/.`), planner mode selection (`1`-`8`),
+speed/height adjustment, and hand compliance controls. Say "stop" or "停止" to
+trigger the sim manager stop tool; it sends `O` before terminating the process.

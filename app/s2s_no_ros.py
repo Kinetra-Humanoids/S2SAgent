@@ -35,7 +35,14 @@ from langchain_core.tools import BaseTool
 from rai.agents.langchain import ReActAgent
 from rai.communication.hri_connector import HRIConnector, HRIMessage
 from rai.initialization.model_initialization import get_llm_model, load_config
-from rai.tools.python import get_basic_tools, get_sensor_tools, get_unitree_g1_tools
+from rai.tools.python import (
+    get_basic_tools,
+    get_sensor_tools,
+    get_unitree_g1_sim_tools,
+    get_unitree_g1_tools,
+    start_unitree_g1_sim_manager,
+    stop_unitree_g1_sim_manager,
+)
 
 from rai_s2s.asr.models import (
     BaseTranscriptionModel,
@@ -49,25 +56,64 @@ from rai_s2s.sound_device.unitree_g1_audio import UnitreeG1AudioPlayer
 from rai_s2s.tts.models import DoubaoTTS, TTSModel
 
 
-S2S_SYSTEM_PROMPT = """You are a concise voice assistant for a physical robot (Unitree G1).
+S2S_BASE_SYSTEM_PROMPT = """You are a concise voice assistant for a robot.
 Reply in the same language as the user, using short, natural sentences suitable
 for speech.
-
-When the user explicitly asks the robot to move, stop, change posture, or perform
-a gesture, use the matching Unitree G1 tool if it is available. Treat commands
-such as "stop", "停止", and "停下" as urgent and call the stop tool immediately.
-Never claim that a physical action was performed unless the corresponding tool
-completed successfully. If a required tool is unavailable or fails, clearly say
-that the action was not performed.
 
 When the user asks about the robot's surroundings, what the robot can see, or a
 visual inspection task, use the sensor camera tool if it is available.
 
-Ask for clarification before acting when a physical command is ambiguous. Refuse
-unsafe physical actions, but do not add unnecessary warnings to ordinary,
-clearly specified commands. For non-action requests, answer normally without
-calling a robot control tool.
+For action requests, use tools only when the user has clearly asked the robot to
+do something. Never claim an action was performed unless the corresponding tool
+completed successfully. If a required tool is unavailable or fails, clearly say
+that the action was not performed. Ask for clarification before acting when a
+command is ambiguous. For non-action requests, answer normally without calling a
+robot control tool.
 """
+
+
+UNITREE_G1_SDK_TOOLS_PROMPT = """Unitree G1 SDK tool policy:
+- These tools control a physical Unitree G1. Treat commands such as "stop",
+  "停止", and "停下" as urgent and call the stop tool immediately.
+- When the user explicitly asks the robot to move, stop, change posture, or
+  perform a gesture, use the matching Unitree G1 tool if it is available.
+- Refuse unsafe physical actions, but do not add unnecessary warnings to
+  ordinary, clearly specified commands.
+"""
+
+
+UNITREE_G1_SIM_TOOLS_PROMPT = """Unitree G1 simulation tool policy:
+- The robot is a GR00T WholeBodyControl Unitree G1 simulation controlled through
+  the manager process. The runtime auto-starts `bash deploy.sh --input-type
+  manager sim` and sends `]` to enter control mode when sim tools are enabled.
+  Do not call the start tool again unless status shows the manager is not
+  running.
+- Prefer `unitree_g1_sim_perform_replay` for named motions and demonstrations.
+  Supported starter actions include `wave_left_hand`, `run`, and `squat_stand`
+  / `蹲起`. If unsure which replay is available, call
+  `unitree_g1_sim_list_replays` first.
+- `unitree_g1_sim_perform_replay` handles the full replay workflow: it switches
+  to ZMQ mode, sends ENTER, runs the latent `.npy` replay player, and returns to
+  keyboard mode after the replay finishes. Do not manually switch interfaces
+  around a replay unless a tool result says recovery is needed.
+- Use lower-level keyboard tools only for simple manual controls such as
+  forward/backward, turning, strafing, planner toggle, mode selection, speed, or
+  height adjustment.
+- Treat "stop", "停止", and "停下" as urgent. Use the sim stop manager tool for a
+  full emergency stop/exit, or the keyboard `instant_stop` action only when the
+  user specifically wants to halt planner momentum without exiting the manager.
+- If a replay `.npy` file is missing, say which replay file is missing and ask
+  the user to add it to the configured replay directory.
+"""
+
+
+def build_system_prompt(args: argparse.Namespace) -> str:
+    prompt_parts = [S2S_BASE_SYSTEM_PROMPT]
+    if args.unitree_g1_sim_tools:
+        prompt_parts.append(UNITREE_G1_SIM_TOOLS_PROMPT)
+    elif args.unitree_g1_tools:
+        prompt_parts.append(UNITREE_G1_SDK_TOOLS_PROMPT)
+    return "\n\n".join(prompt_parts)
 
 
 def _parse_csv(value: Optional[str]) -> Optional[list[str]]:
@@ -113,6 +159,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
     tools = raw_config.get("tools", {})
     ros2 = raw_config.get("ros2", {})
     unitree_g1 = raw_config.get("unitree_g1", {})
+    unitree_g1_sim = raw_config.get("unitree_g1_sim", {})
     unitree_g1_audio = raw_config.get("unitree_g1_audio", {})
     sensor_tool = raw_config.get("sensor_tool", {})
     openai = raw_config.get("openai", {})
@@ -160,6 +207,38 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         ),
         "unitree_g1_network_interface": unitree_g1.get("network_interface", ""),
         "unitree_g1_control_enabled": unitree_g1.get("control_enabled", False),
+        "unitree_g1_sim_tools": unitree_g1_sim.get("tools_enabled", False),
+        "unitree_g1_sim_deploy_dir": unitree_g1_sim.get("deploy_dir", ""),
+        "unitree_g1_sim_gr00t_root": unitree_g1_sim.get("gr00t_root", ""),
+        "unitree_g1_sim_replay_dir": unitree_g1_sim.get(
+            "replay_dir",
+            "replays/unitree_g1_sim",
+        ),
+        "unitree_g1_sim_auto_start": unitree_g1_sim.get("auto_start", True),
+        "unitree_g1_sim_start_control": unitree_g1_sim.get("start_control", True),
+        "unitree_g1_sim_startup_settle_seconds": unitree_g1_sim.get(
+            "startup_settle_seconds",
+            2.0,
+        ),
+        "unitree_g1_sim_enabled_tools": ",".join(
+            unitree_g1_sim.get(
+                "enabled_tools",
+                [
+                    "start",
+                    "stop",
+                    "status",
+                    "perform_replay",
+                    "list_replays",
+                    "switch_interface",
+                    "start_control",
+                    "toggle_planner",
+                    "keyboard",
+                    "select_mode",
+                    "adjust",
+                    "compliance",
+                ],
+            )
+        ),
         "unitree_g1_audio_enabled": unitree_g1_audio.get("enabled", False),
         "unitree_g1_audio_network_interface": unitree_g1_audio.get("network_interface", ""),
         "unitree_g1_audio_app_name": unitree_g1_audio.get("app_name", "rai_s2s"),
@@ -228,6 +307,8 @@ class LocalS2SAgent(SpeechToSpeechAgent):
         self._connector = connector
         self._text_agent = text_agent
         self._unitree_audio_player = unitree_audio_player
+        self._suppress_microphone_until = 0.0
+        self._robot_audio_playing = threading.Event()
         super().__init__(
             from_human_topic,
             to_human_topic,
@@ -275,11 +356,16 @@ class LocalS2SAgent(SpeechToSpeechAgent):
                 continue
             try:
                 self.logger.info("Playing speech through Unitree G1 speaker")
+                self._robot_audio_playing.set()
                 self._unitree_audio_player.play(audio)
                 print("[Unitree Audio] Playback completed", flush=True)
             except Exception as exc:
                 self.logger.exception("Failed to play audio through Unitree G1")
                 print(f"[Unitree Audio Error] Playback failed: {exc}", flush=True)
+            finally:
+                self._robot_audio_playing.clear()
+                self._suppress_microphone_until = time.time() + 0.8
+                self.playback_data.playing = False
 
     def run(self):
         if self._unitree_audio_player is None:
@@ -295,6 +381,18 @@ class LocalS2SAgent(SpeechToSpeechAgent):
             on_done=lambda: None,
         )
         self.logger.info("SpeechToSpeechAgent Started!")
+
+    def _on_microphone_sample(self, indata, status_flags):
+        if self._unitree_audio_player is not None and (
+            self._robot_audio_playing.is_set()
+            or time.time() < self._suppress_microphone_until
+        ):
+            with self.sample_buffer_lock:
+                self.sample_buffer = []
+            self.recording_started = False
+            self.grace_period_start = 0
+            return
+        return super()._on_microphone_sample(indata, status_flags)
 
     def set_playback_state(self, state):
         super().set_playback_state(state)
@@ -455,6 +553,54 @@ def parse_args() -> argparse.Namespace:
         help="Allow Unitree G1 tools to send movement/posture commands",
     )
     parser.add_argument(
+        "--unitree-g1-sim-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable GR00T WholeBodyControl Unitree G1 sim manager tools",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-deploy-dir",
+        default=None,
+        help="Path to GR00T gear_sonic_deploy directory containing deploy.sh",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-gr00t-root",
+        default=None,
+        help="Path to GR00T-WholeBodyControl root for replay player",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-replay-dir",
+        default=None,
+        help="Directory containing Unitree G1 sim replay .npy files",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-auto-start",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Auto-run deploy.sh manager sim when the agent starts",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-start-control",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="After auto-starting manager sim, send `]` to enter control mode",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-startup-settle-seconds",
+        type=float,
+        default=None,
+        help="Delay between manager sim start and sending `]`",
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-enabled-tools",
+        default=None,
+        help=(
+            "Comma-separated sim manager tools to enable: "
+            "start,stop,status,perform_replay,list_replays,switch_interface,"
+            "start_control,toggle_planner,keyboard,select_mode,adjust,compliance"
+        ),
+    )
+    parser.add_argument(
         "--unitree-g1-audio-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -584,6 +730,15 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 enabled_tools=_parse_csv(args.unitree_g1_enabled_tools),
             )
         )
+    if args.unitree_g1_sim_tools:
+        tools.extend(
+            get_unitree_g1_sim_tools(
+                deploy_dir=args.unitree_g1_sim_deploy_dir,
+                gr00t_root=args.unitree_g1_sim_gr00t_root,
+                replay_dir=args.unitree_g1_sim_replay_dir,
+                enabled_tools=_parse_csv(args.unitree_g1_sim_enabled_tools),
+            )
+        )
     if args.sensor_tools:
         tools.extend(
             get_sensor_tools(
@@ -649,6 +804,18 @@ def main() -> int:
     config = load_config(args.config)
     openai_base_url = args.openai_base_url or config.openai.base_url
     tools, ros2_connector = build_tools(args)
+    if args.unitree_g1_sim_tools and args.unitree_g1_sim_auto_start:
+        logging.info("Auto-starting Unitree G1 sim manager...")
+        try:
+            startup_message = start_unitree_g1_sim_manager(
+                deploy_dir=args.unitree_g1_sim_deploy_dir,
+                start_control=args.unitree_g1_sim_start_control,
+                settle_seconds=args.unitree_g1_sim_startup_settle_seconds,
+            )
+            logging.info("Unitree G1 sim manager startup:\n%s", startup_message)
+        except Exception:
+            logging.exception("Failed to auto-start Unitree G1 sim manager")
+            raise
     llm = get_llm_model(
         "complex_model",
         config_path=args.config,
@@ -658,7 +825,7 @@ def main() -> int:
     # Text agent: ReAct + configured vendor from config.toml
     # NOTE: This requires API key(s) according to the selected vendor in config.toml.
 
-    system_prompt = S2S_SYSTEM_PROMPT
+    system_prompt = build_system_prompt(args)
     text_agent = ReActAgent(
         target_connectors={"to_human": connector},
         llm=llm,
@@ -808,6 +975,14 @@ def main() -> int:
         logging.info("Stopping...")
         run_cleanup_step("speech-to-speech agent", s2s.stop, timeout_sec=5.0)
         run_cleanup_step("text agent", text_agent.stop, timeout_sec=5.0)
+        if args.unitree_g1_sim_tools and args.unitree_g1_sim_auto_start:
+            run_cleanup_step(
+                "Unitree G1 sim manager",
+                lambda: stop_unitree_g1_sim_manager(
+                    deploy_dir=args.unitree_g1_sim_deploy_dir
+                ),
+                timeout_sec=8.0,
+            )
         if ros2_connector is not None:
             run_cleanup_step("ROS2 connector", ros2_connector.shutdown, timeout_sec=5.0)
         logging.info("Stopped.")
