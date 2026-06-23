@@ -135,16 +135,24 @@ class UnitreeG1SimManager:
             deploy_script = cwd / "deploy.sh"
             if not deploy_script.exists():
                 raise RuntimeError(f"deploy.sh was not found in {cwd}")
+            setup_script = cwd / "scripts" / "setup_env.sh"
+            if not setup_script.exists():
+                raise RuntimeError(f"scripts/setup_env.sh was not found in {cwd}")
 
             master_fd, slave_fd = pty.openpty()
-            command = ["bash", "deploy.sh", "--input-type", "manager"]
+            deploy_command = ["bash", "deploy.sh", "--input-type", "manager"]
             if extra_args.strip():
-                command.extend(shlex.split(extra_args))
-            command.append("sim")
+                deploy_command.extend(shlex.split(extra_args))
+            deploy_command.append("sim")
+            command = [
+                "bash",
+                "-lc",
+                "source scripts/setup_env.sh && " + shlex.join(deploy_command),
+            ]
 
             self._logs.clear()
             self._append_log(f"$ cd {cwd}")
-            self._append_log("$ " + shlex.join(command))
+            self._append_log("$ " + command[-1])
             self._process = subprocess.Popen(
                 command,
                 cwd=str(cwd),
@@ -164,7 +172,7 @@ class UnitreeG1SimManager:
             self._reader_thread.start()
             return (
                 "Started GR00T WBC manager sim: "
-                f"pid={self._process.pid}, command={shlex.join(command)}. "
+                f"pid={self._process.pid}, command={command[-1]}. "
                 "Use unitree_g1_sim_start_control to send ']' before motion commands."
             )
 
@@ -542,10 +550,11 @@ def get_unitree_g1_sim_tools(
     ) -> str:
         """Start GR00T WholeBodyControl manager sim.
 
-        Runs `bash deploy.sh --input-type manager sim` from the configured
-        `gear_sonic_deploy` directory. `extra_args` may contain optional deploy
-        flags such as `--zmq-host 127.0.0.1 --zmq-port 5556 --zmq-topic pose`;
-        they are inserted before the final `sim` argument.
+        Runs `source scripts/setup_env.sh && bash deploy.sh --input-type
+        manager sim` from the configured `gear_sonic_deploy` directory.
+        `extra_args` may contain optional deploy flags such as `--zmq-host
+        127.0.0.1 --zmq-port 5556 --zmq-topic pose`; they are inserted before
+        the final `sim` argument.
         """
         target_deploy_dir = deploy_dir or configured_deploy_dir
         active_deploy_dir["value"] = target_deploy_dir
