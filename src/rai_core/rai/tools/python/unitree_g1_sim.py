@@ -260,6 +260,7 @@ class UnitreeG1SimManager:
         confirm_deployment: bool = True,
         start_control: bool = True,
         settle_seconds: float = 2.0,
+        init_done_timeout: float = 60.0,
     ) -> str:
         messages = [self.start(deploy_dir=deploy_dir, extra_args=extra_args)]
         if settle_seconds > 0:
@@ -269,7 +270,9 @@ class UnitreeG1SimManager:
             self._send_key("y")
             self._send_key("\n")
             messages.append("Sent deployment confirmation: Y")
-            time.sleep(1.0)
+            messages.append(
+                self.wait_for_output("Init Done", timeout=init_done_timeout)
+            )
         if start_control:
             messages.append(self.send_key("]", "start_control"))
         return "\n".join(messages)
@@ -330,6 +333,19 @@ class UnitreeG1SimManager:
                     time.sleep(safe_interval)
             return f"Sent {label}: key={key!r}, repeats={safe_repeats}"
 
+    def wait_for_output(self, text: str, timeout: float = 60.0) -> str:
+        deadline = time.time() + max(1.0, float(timeout))
+        while time.time() < deadline:
+            with self._lock:
+                self._require_running()
+                if any(text in line for line in self._logs):
+                    return f"Detected manager output: {text!r}"
+            time.sleep(0.2)
+        raise RuntimeError(
+            f"Timed out waiting for manager output {text!r}. Recent logs:\n"
+            f"{self.tail_logs()}"
+        )
+
     def prepare_zmq_streaming(self) -> str:
         with self._lock:
             self._require_running()
@@ -337,6 +353,19 @@ class UnitreeG1SimManager:
             time.sleep(0.2)
             self._send_key("\n")
             return "Switched manager to ZMQ interface and sent ENTER to toggle streaming."
+
+    def prepare_replay_streaming(self) -> str:
+        with self._lock:
+            self._require_running()
+            self._send_key("]")
+            time.sleep(1.0)
+            self._send_key("#")
+            time.sleep(0.2)
+            self._send_key("\n")
+            return (
+                "Prepared replay streaming: sent ']', waited 1.0s, "
+                "then sent '#' and ENTER."
+            )
 
     def switch_to_keyboard(self) -> str:
         return self.send_key("!", "switch_interface:keyboard")
@@ -512,6 +541,30 @@ class UnitreeG1SimReplayPlayer:
             )
         return f"Replay player exited with code {return_code}. Recent logs:\n{self.tail_logs()}"
 
+    def wait_for_output(self, text: str, timeout: float = 60.0) -> str:
+        deadline = time.time() + max(1.0, float(timeout))
+        while time.time() < deadline:
+            process = self._process
+            if process is None:
+                return "Replay player is not running."
+            if any(text in line for line in self._logs):
+                return f"Detected replay player output: {text!r}"
+            if process.poll() is not None:
+                return (
+                    f"Replay player exited before output {text!r} was detected. "
+                    f"Recent logs:\n{self.tail_logs()}"
+                )
+            time.sleep(0.2)
+        raise RuntimeError(
+            f"Timed out waiting for replay player output {text!r}. Recent logs:\n"
+            f"{self.tail_logs()}"
+        )
+
+    def wait_for_end_and_stop(self, timeout: float = 60.0) -> str:
+        detected = self.wait_for_output("End", timeout=timeout)
+        stopped = self.stop()
+        return f"{detected}\n{stopped}\nRecent logs:\n{self.tail_logs()}"
+
     def stop(self) -> str:
         process = self._process
         if process is None:
@@ -652,6 +705,7 @@ def start_unitree_g1_sim_manager(
     confirm_deployment: bool = True,
     start_control: bool = True,
     settle_seconds: float = 2.0,
+    init_done_timeout: float = 60.0,
     terminal_viewer: bool | None = None,
     log_dir: str | None = None,
 ) -> str:
@@ -666,6 +720,7 @@ def start_unitree_g1_sim_manager(
         confirm_deployment=confirm_deployment,
         start_control=start_control,
         settle_seconds=settle_seconds,
+        init_done_timeout=init_done_timeout,
     )
 
 
@@ -760,17 +815,18 @@ def get_unitree_g1_sim_tools(
     ) -> str:
         """Perform a high-level replay action from a latent .npy file.
 
-        The tool switches manager to ZMQ (`#`), sends ENTER to enable streaming,
-        then runs `sonic_encoder_input_player.py --latent-input-file <file>` from
-        the configured GR00T-WholeBodyControl root. Supported action aliases
-        include wave_left_hand, run, and squat_stand/蹲起. A direct .npy path is
-        also accepted. By default, the manager switches back to keyboard mode
-        after the replay player exits.
+        The tool sends `]`, waits 1 second, switches manager to ZMQ (`#`), sends
+        ENTER to enable streaming, then runs
+        `sonic_encoder_input_player.py --latent-input-file <file>` from the
+        configured GR00T-WholeBodyControl root. Supported action aliases include
+        wave_left_hand, run, and squat_stand/蹲起. A direct .npy path is also
+        accepted. By default, the replay player shell is closed after it prints
+        `End`, then the manager switches back to keyboard mode.
         """
         replay_file = _resolve_replay_file(configured_replay_dir, action)
         sim_manager = manager()
         replay_player = player()
-        manager_message = sim_manager.prepare_zmq_streaming()
+        manager_message = sim_manager.prepare_replay_streaming()
         player_message = replay_player.play(
             replay_file,
             gr00t_root=configured_gr00t_root,
@@ -778,7 +834,7 @@ def get_unitree_g1_sim_tools(
         )
         messages = [manager_message, player_message]
         if wait:
-            messages.append(replay_player.wait(timeout=timeout))
+            messages.append(replay_player.wait_for_end_and_stop(timeout=timeout))
             if return_to_keyboard and not replay_player.is_running():
                 messages.append(sim_manager.switch_to_keyboard())
             elif return_to_keyboard:
@@ -787,7 +843,7 @@ def get_unitree_g1_sim_tools(
                 )
         elif return_to_keyboard:
             def restore_keyboard_after_replay() -> None:
-                replay_player.wait(timeout=timeout)
+                replay_player.wait_for_end_and_stop(timeout=timeout)
                 if not replay_player.is_running():
                     sim_manager.switch_to_keyboard()
 

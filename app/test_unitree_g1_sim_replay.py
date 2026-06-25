@@ -201,7 +201,8 @@ def main() -> int:
         print("[Sim Replay Test] Starting manager sim and entering control mode...")
         if confirm_deployment:
             print("[Sim Replay Test] Deployment confirmation after startup: 'Y' then ENTER")
-        print("[Sim Replay Test] Manager hotkey after startup: ']'")
+            print("[Sim Replay Test] Waiting for manager output: Init Done")
+        print("[Sim Replay Test] Manager hotkey after Init Done: ']'")
         startup_message = start_unitree_g1_sim_manager(
             deploy_dir=deploy_dir,
             confirm_deployment=confirm_deployment,
@@ -225,7 +226,8 @@ def main() -> int:
     print(f"[Sim Replay Test] Performing replay: {args.action}")
     replay_file = _resolve_replay_file(replay_dir, args.action)
     print("[Sim Replay Test] Replay tool hotkeys:")
-    print("  before replay: '#' then ENTER")
+    print("  before replay: ']', wait 1s, '#' then ENTER")
+    print("  replay shell: close after output contains 'End'")
     if not args.no_return_to_keyboard:
         print("  after replay: '!'")
     print_shell_command(
