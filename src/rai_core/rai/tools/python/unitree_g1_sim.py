@@ -560,8 +560,8 @@ class UnitreeG1SimReplayPlayer:
             f"{self.tail_logs()}"
         )
 
-    def wait_for_end_and_stop(self, timeout: float = 60.0) -> str:
-        detected = self.wait_for_output("End", timeout=timeout)
+    def wait_for_stopped_and_stop(self, timeout: float = 60.0) -> str:
+        detected = self.wait_for_output("[EncoderInputPlayer] Stopped", timeout=timeout)
         stopped = self.stop()
         return f"{detected}\n{stopped}\nRecent logs:\n{self.tail_logs()}"
 
@@ -821,7 +821,8 @@ def get_unitree_g1_sim_tools(
         configured GR00T-WholeBodyControl root. Supported action aliases include
         wave_left_hand, run, and squat_stand/蹲起. A direct .npy path is also
         accepted. By default, the replay player shell is closed after it prints
-        `End`, then the manager switches back to keyboard mode.
+        `[EncoderInputPlayer] Stopped`, then the manager switches back to
+        keyboard mode.
         """
         replay_file = _resolve_replay_file(configured_replay_dir, action)
         sim_manager = manager()
@@ -834,7 +835,7 @@ def get_unitree_g1_sim_tools(
         )
         messages = [manager_message, player_message]
         if wait:
-            messages.append(replay_player.wait_for_end_and_stop(timeout=timeout))
+            messages.append(replay_player.wait_for_stopped_and_stop(timeout=timeout))
             if return_to_keyboard and not replay_player.is_running():
                 messages.append(sim_manager.switch_to_keyboard())
             elif return_to_keyboard:
@@ -843,7 +844,7 @@ def get_unitree_g1_sim_tools(
                 )
         elif return_to_keyboard:
             def restore_keyboard_after_replay() -> None:
-                replay_player.wait_for_end_and_stop(timeout=timeout)
+                replay_player.wait_for_stopped_and_stop(timeout=timeout)
                 if not replay_player.is_running():
                     sim_manager.switch_to_keyboard()
 

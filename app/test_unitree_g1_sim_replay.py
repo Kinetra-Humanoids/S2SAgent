@@ -227,7 +227,7 @@ def main() -> int:
     replay_file = _resolve_replay_file(replay_dir, args.action)
     print("[Sim Replay Test] Replay tool hotkeys:")
     print("  before replay: ']', wait 1s, '#' then ENTER")
-    print("  replay shell: close after output contains 'End'")
+    print("  replay shell: close after output contains '[EncoderInputPlayer] Stopped'")
     if not args.no_return_to_keyboard:
         print("  after replay: '!'")
     print_shell_command(
