@@ -129,7 +129,10 @@ def print_shell_command(label: str, cwd: str | Path, command: str) -> None:
 
 
 def build_manager_command() -> str:
-    return "./deploy.sh --input-type manager --zmq-host localhost --hand-type inspire real"
+    return (
+        "source scripts/setup_env.sh && "
+        "./deploy.sh --input-type manager --zmq-host localhost --hand-type inspire real"
+    )
 
 
 def build_replay_command(latent_input_file: Path) -> str:

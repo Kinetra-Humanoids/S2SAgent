@@ -117,6 +117,9 @@ class UnitreeG1RealManager:
             deploy_script = cwd / "deploy.sh"
             if not deploy_script.exists():
                 raise RuntimeError(f"deploy.sh was not found in {cwd}")
+            setup_script = cwd / "scripts" / "setup_env.sh"
+            if not setup_script.exists():
+                raise RuntimeError(f"scripts/setup_env.sh was not found in {cwd}")
 
             deploy_command = [
                 "./deploy.sh",
@@ -130,7 +133,11 @@ class UnitreeG1RealManager:
             if extra_args.strip():
                 deploy_command.extend(shlex.split(extra_args))
             deploy_command.append("real")
-            command = ["bash", "-lc", shlex.join(deploy_command)]
+            command = [
+                "bash",
+                "-lc",
+                "source scripts/setup_env.sh && " + shlex.join(deploy_command),
+            ]
 
             master_fd, slave_fd = pty.openpty()
             self._logs.clear()
@@ -464,8 +471,8 @@ def get_unitree_g1_real_tools(
     ) -> str:
         """Start GR00T WholeBodyControl manager for the real Unitree G1.
 
-        Runs `./deploy.sh --input-type manager --zmq-host localhost
-        --hand-type inspire real` from the configured deploy directory.
+        Runs `source scripts/setup_env.sh && ./deploy.sh --input-type manager
+        --zmq-host localhost --hand-type inspire real` from the configured deploy directory.
         `extra_args` are inserted before the final `real` argument.
         """
         target_deploy_dir = deploy_dir or configured_deploy_dir

@@ -115,8 +115,9 @@ UNITREE_G1_REAL_TOOLS_PROMPT = """Unitree G1 real robot manager tool policy:
   and call the stop tool immediately.
 - Use `unitree_g1_real_perform_replay` only for clear, safe named motion
   requests. Never claim a motion ran unless the tool completed successfully.
-- The runtime can auto-start `./deploy.sh --input-type manager --zmq-host
-  localhost --hand-type inspire real` when real tools are enabled.
+- The runtime can auto-start `source scripts/setup_env.sh && ./deploy.sh
+  --input-type manager --zmq-host localhost --hand-type inspire real` when real
+  tools are enabled.
 - If a replay `.npy` file is missing, say which replay file is missing and ask
   the user to add it to the configured replay directory.
 """

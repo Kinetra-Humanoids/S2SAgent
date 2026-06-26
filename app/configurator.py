@@ -408,6 +408,7 @@ def build_unitree_g1_real_terminal_commands(unitree_g1_real: dict[str, Any]) -> 
         lines.append(f"cd {shlex.quote(deploy_dir)}")
     lines.extend(
         [
+            "source scripts/setup_env.sh",
             "./deploy.sh --input-type manager --zmq-host localhost --hand-type inspire real",
             "",
             "# 2. For replay actions, the backend runs:",
@@ -968,8 +969,9 @@ def tools_tab(config: dict[str, Any]) -> None:
         key="unitree_g1_real_tools_enabled",
         on_change=disable_sdk_sim_tools_when_real_enabled,
         help=(
-            "Expose tools that run `./deploy.sh --input-type manager "
-            "--zmq-host localhost --hand-type inspire real` and send manager hotkeys. "
+            "Expose tools that run `source scripts/setup_env.sh && ./deploy.sh "
+            "--input-type manager --zmq-host localhost --hand-type inspire real` "
+            "and send manager hotkeys. "
             "Mutually exclusive with SDK and sim tools."
         ),
     )
