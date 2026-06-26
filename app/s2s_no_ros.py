@@ -38,8 +38,10 @@ from rai.initialization.model_initialization import get_llm_model, load_config
 from rai.tools.python import (
     get_basic_tools,
     get_sensor_tools,
+    get_unitree_g1_real_tools,
     get_unitree_g1_sim_tools,
     get_unitree_g1_tools,
+    start_unitree_g1_real_manager,
     start_unitree_g1_sim_manager,
     stop_unitree_g1_sim_manager,
 )
@@ -107,9 +109,24 @@ UNITREE_G1_SIM_TOOLS_PROMPT = """Unitree G1 simulation tool policy:
 """
 
 
+UNITREE_G1_REAL_TOOLS_PROMPT = """Unitree G1 real robot manager tool policy:
+- These tools control a physical Unitree G1 through the GR00T WholeBodyControl
+  manager process. Treat commands such as "stop", "停止", and "停下" as urgent
+  and call the stop tool immediately.
+- Use `unitree_g1_real_perform_replay` only for clear, safe named motion
+  requests. Never claim a motion ran unless the tool completed successfully.
+- The runtime can auto-start `./deploy.sh --input-type manager --zmq-host
+  localhost --hand-type inspire real` when real tools are enabled.
+- If a replay `.npy` file is missing, say which replay file is missing and ask
+  the user to add it to the configured replay directory.
+"""
+
+
 def build_system_prompt(args: argparse.Namespace) -> str:
     prompt_parts = [S2S_BASE_SYSTEM_PROMPT]
-    if args.unitree_g1_sim_tools:
+    if args.unitree_g1_real_tools:
+        prompt_parts.append(UNITREE_G1_REAL_TOOLS_PROMPT)
+    elif args.unitree_g1_sim_tools:
         prompt_parts.append(UNITREE_G1_SIM_TOOLS_PROMPT)
     elif args.unitree_g1_tools:
         prompt_parts.append(UNITREE_G1_SDK_TOOLS_PROMPT)
@@ -160,6 +177,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
     ros2 = raw_config.get("ros2", {})
     unitree_g1 = raw_config.get("unitree_g1", {})
     unitree_g1_sim = raw_config.get("unitree_g1_sim", {})
+    unitree_g1_real = raw_config.get("unitree_g1_real", {})
     unitree_g1_audio = raw_config.get("unitree_g1_audio", {})
     sensor_tool = raw_config.get("sensor_tool", {})
     openai = raw_config.get("openai", {})
@@ -234,6 +252,50 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         ),
         "unitree_g1_sim_enabled_tools": ",".join(
             unitree_g1_sim.get(
+                "enabled_tools",
+                [
+                    "start",
+                    "stop",
+                    "status",
+                    "perform_replay",
+                    "list_replays",
+                    "switch_interface",
+                    "start_control",
+                    "toggle_planner",
+                    "keyboard",
+                    "select_mode",
+                    "adjust",
+                    "compliance",
+                ],
+            )
+        ),
+        "unitree_g1_real_tools": unitree_g1_real.get("tools_enabled", False),
+        "unitree_g1_real_deploy_dir": unitree_g1_real.get("deploy_dir", ""),
+        "unitree_g1_real_gr00t_root": unitree_g1_real.get("gr00t_root", ""),
+        "unitree_g1_real_replay_dir": unitree_g1_real.get(
+            "replay_dir",
+            "replays/unitree_g1_sim",
+        ),
+        "unitree_g1_real_auto_start": unitree_g1_real.get("auto_start", True),
+        "unitree_g1_real_confirm_deployment": unitree_g1_real.get(
+            "confirm_deployment",
+            True,
+        ),
+        "unitree_g1_real_start_control": unitree_g1_real.get("start_control", True),
+        "unitree_g1_real_startup_settle_seconds": unitree_g1_real.get(
+            "startup_settle_seconds",
+            2.0,
+        ),
+        "unitree_g1_real_terminal_viewer": unitree_g1_real.get(
+            "terminal_viewer",
+            False,
+        ),
+        "unitree_g1_real_log_dir": unitree_g1_real.get(
+            "log_dir",
+            "logs/unitree_g1_real",
+        ),
+        "unitree_g1_real_enabled_tools": ",".join(
+            unitree_g1_real.get(
                 "enabled_tools",
                 [
                     "start",
@@ -630,6 +692,71 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--unitree-g1-real-tools",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable GR00T WholeBodyControl Unitree G1 real manager tools",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-deploy-dir",
+        default=None,
+        help="Path to GR00T real deploy directory containing deploy.sh",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-gr00t-root",
+        default=None,
+        help="Path to GR00T-WholeBodyControl root for replay player",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-replay-dir",
+        default=None,
+        help="Directory containing Unitree G1 real replay .npy files",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-auto-start",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Auto-run deploy.sh manager real when the agent starts",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-confirm-deployment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Send `Y` after starting real deploy.sh to confirm deployment",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-start-control",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="After auto-starting real manager, send `]` to enter control mode",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-startup-settle-seconds",
+        type=float,
+        default=None,
+        help="Delay between real manager start and confirmation/control keys",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-terminal-viewer",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Open a terminal window that tails Unitree G1 real tool logs",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-log-dir",
+        default=None,
+        help="Directory for Unitree G1 real manager/replay terminal logs",
+    )
+    parser.add_argument(
+        "--unitree-g1-real-enabled-tools",
+        default=None,
+        help=(
+            "Comma-separated real manager tools to enable: "
+            "start,stop,status,perform_replay,list_replays,switch_interface,"
+            "start_control,toggle_planner,keyboard,select_mode,adjust,compliance"
+        ),
+    )
+    parser.add_argument(
         "--unitree-g1-audio-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -770,6 +897,17 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 log_dir=args.unitree_g1_sim_log_dir,
             )
         )
+    if args.unitree_g1_real_tools:
+        tools.extend(
+            get_unitree_g1_real_tools(
+                deploy_dir=args.unitree_g1_real_deploy_dir,
+                gr00t_root=args.unitree_g1_real_gr00t_root,
+                replay_dir=args.unitree_g1_real_replay_dir,
+                enabled_tools=_parse_csv(args.unitree_g1_real_enabled_tools),
+                terminal_viewer=args.unitree_g1_real_terminal_viewer,
+                log_dir=args.unitree_g1_real_log_dir,
+            )
+        )
     if args.sensor_tools:
         tools.extend(
             get_sensor_tools(
@@ -849,6 +987,21 @@ def main() -> int:
             logging.info("Unitree G1 sim manager startup:\n%s", startup_message)
         except Exception:
             logging.exception("Failed to auto-start Unitree G1 sim manager")
+            raise
+    if args.unitree_g1_real_tools and args.unitree_g1_real_auto_start:
+        logging.info("Auto-starting Unitree G1 real manager...")
+        try:
+            startup_message = start_unitree_g1_real_manager(
+                deploy_dir=args.unitree_g1_real_deploy_dir,
+                confirm_deployment=args.unitree_g1_real_confirm_deployment,
+                start_control=args.unitree_g1_real_start_control,
+                settle_seconds=args.unitree_g1_real_startup_settle_seconds,
+                terminal_viewer=args.unitree_g1_real_terminal_viewer,
+                log_dir=args.unitree_g1_real_log_dir,
+            )
+            logging.info("Unitree G1 real manager startup:\n%s", startup_message)
+        except Exception:
+            logging.exception("Failed to auto-start Unitree G1 real manager")
             raise
     llm = get_llm_model(
         "complex_model",

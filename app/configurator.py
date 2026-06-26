@@ -153,6 +153,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "compliance",
         ],
     },
+    "unitree_g1_real": {
+        "tools_enabled": False,
+        "deploy_dir": "",
+        "gr00t_root": "",
+        "replay_dir": "replays/unitree_g1_sim",
+        "auto_start": True,
+        "confirm_deployment": True,
+        "start_control": True,
+        "startup_settle_seconds": 2.0,
+        "terminal_viewer": False,
+        "log_dir": "logs/unitree_g1_real",
+        "enabled_tools": [
+            "start",
+            "stop",
+            "status",
+            "perform_replay",
+            "list_replays",
+            "switch_interface",
+            "start_control",
+            "toggle_planner",
+            "keyboard",
+            "select_mode",
+            "adjust",
+            "compliance",
+        ],
+    },
     "sensor_tool": {
         "enabled": False,
         "transport": "zmq",
@@ -280,6 +306,12 @@ def save_env(values: dict[str, str]) -> None:
         "UNITREE_G1_SIM_TERMINAL_VIEWER="
         f'"{existing.get("UNITREE_G1_SIM_TERMINAL_VIEWER", "false")}"',
         f'UNITREE_G1_SIM_LOG_DIR="{existing.get("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim")}"',
+        f'UNITREE_G1_REAL_DEPLOY_DIR="{existing.get("UNITREE_G1_REAL_DEPLOY_DIR", "")}"',
+        "UNITREE_G1_REAL_REPLAY_DIR="
+        f'"{existing.get("UNITREE_G1_REAL_REPLAY_DIR", "replays/unitree_g1_sim")}"',
+        "UNITREE_G1_REAL_TERMINAL_VIEWER="
+        f'"{existing.get("UNITREE_G1_REAL_TERMINAL_VIEWER", "false")}"',
+        f'UNITREE_G1_REAL_LOG_DIR="{existing.get("UNITREE_G1_REAL_LOG_DIR", "logs/unitree_g1_real")}"',
         "",
     ]
     ENV_PATH.write_text("\n".join(lines), encoding="utf-8")
@@ -364,14 +396,55 @@ def build_unitree_g1_sim_terminal_commands(unitree_g1_sim: dict[str, Any]) -> st
     return "\n".join(lines)
 
 
+def build_unitree_g1_real_terminal_commands(unitree_g1_real: dict[str, Any]) -> str:
+    deploy_dir = unitree_g1_real.get("deploy_dir", "")
+    gr00t_root = unitree_g1_real.get("gr00t_root", "")
+    replay_dir = unitree_g1_real.get("replay_dir", "replays/unitree_g1_sim")
+    log_dir = unitree_g1_real.get("log_dir", "logs/unitree_g1_real")
+    lines = [
+        "# 1. The S2S tool backend starts the real Unitree G1 manager with:",
+    ]
+    if deploy_dir:
+        lines.append(f"cd {shlex.quote(deploy_dir)}")
+    lines.extend(
+        [
+            "./deploy.sh --input-type manager --zmq-host localhost --hand-type inspire real",
+            "",
+            "# 2. For replay actions, the backend runs:",
+        ]
+    )
+    if gr00t_root:
+        lines.append(f"cd {shlex.quote(gr00t_root)}")
+    lines.extend(
+        [
+            "source .venv_teleop/bin/activate",
+            "python gear_sonic/scripts/sonic_encoder_input_player.py \\",
+            f"  --latent-input-file {shlex.quote(str(Path(replay_dir) / 'wave_left_hand.npy'))}",
+            "",
+            "# 3. To watch backend terminal output manually:",
+            f"tail -f {shlex.quote(str(Path(log_dir) / 'manager.log'))}",
+            f"tail -f {shlex.quote(str(Path(log_dir) / 'replay_player.log'))}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def disable_sim_tools_when_sdk_enabled() -> None:
     if st.session_state.get("unitree_g1_tools_enabled", False):
         st.session_state.unitree_g1_sim_tools_enabled = False
+        st.session_state.unitree_g1_real_tools_enabled = False
 
 
 def disable_sdk_tools_when_sim_enabled() -> None:
     if st.session_state.get("unitree_g1_sim_tools_enabled", False):
         st.session_state.unitree_g1_tools_enabled = False
+        st.session_state.unitree_g1_real_tools_enabled = False
+
+
+def disable_sdk_sim_tools_when_real_enabled() -> None:
+    if st.session_state.get("unitree_g1_real_tools_enabled", False):
+        st.session_state.unitree_g1_tools_enabled = False
+        st.session_state.unitree_g1_sim_tools_enabled = False
 
 
 def model_tab(config: dict[str, Any]) -> None:
@@ -684,17 +757,21 @@ def tools_tab(config: dict[str, Any]) -> None:
     tools = config["tools"]
     unitree_g1 = config["unitree_g1"]
     unitree_g1_sim = config["unitree_g1_sim"]
+    unitree_g1_real = config["unitree_g1_real"]
     sensor_tool = config["sensor_tool"]
     ros2 = config["ros2"]
     env = st.session_state.env
     tools["python_tools"] = st.checkbox(
         "Enable Python tools", value=bool(tools["python_tools"])
     )
-    if bool(unitree_g1.get("tools_enabled")) and bool(
-        unitree_g1_sim.get("tools_enabled")
-    ):
+    enabled_unitree_manager_count = sum(
+        bool(section.get("tools_enabled"))
+        for section in (unitree_g1, unitree_g1_sim, unitree_g1_real)
+    )
+    if enabled_unitree_manager_count > 1:
         unitree_g1_sim["tools_enabled"] = False
-        st.warning("Unitree G1 SDK tools and Sim tools cannot both be enabled.")
+        unitree_g1_real["tools_enabled"] = False
+        st.warning("Unitree G1 SDK, Sim, and Real tools are mutually exclusive.")
 
     st.divider()
     st.subheader("Unitree G1 Tools")
@@ -707,6 +784,7 @@ def tools_tab(config: dict[str, Any]) -> None:
     )
     if unitree_g1["tools_enabled"]:
         unitree_g1_sim["tools_enabled"] = False
+        unitree_g1_real["tools_enabled"] = False
     enabled_unitree_tools = set(
         unitree_g1.get(
             "enabled_tools",
@@ -761,6 +839,7 @@ def tools_tab(config: dict[str, Any]) -> None:
     )
     if unitree_g1_sim["tools_enabled"]:
         unitree_g1["tools_enabled"] = False
+        unitree_g1_real["tools_enabled"] = False
     unitree_g1_sim["deploy_dir"] = st.text_input(
         "GR00T deploy directory",
         value=unitree_g1_sim.get("deploy_dir", "")
@@ -878,6 +957,128 @@ def tools_tab(config: dict[str, Any]) -> None:
     ):
         st.code(
             build_unitree_g1_sim_terminal_commands(unitree_g1_sim),
+            language="bash",
+        )
+
+    st.divider()
+    st.subheader("Unitree G1 Real Manager Tools")
+    unitree_g1_real["tools_enabled"] = st.checkbox(
+        "Enable Unitree G1 real manager tools",
+        value=bool(unitree_g1_real.get("tools_enabled", False)),
+        key="unitree_g1_real_tools_enabled",
+        on_change=disable_sdk_sim_tools_when_real_enabled,
+        help=(
+            "Expose tools that run `./deploy.sh --input-type manager "
+            "--zmq-host localhost --hand-type inspire real` and send manager hotkeys. "
+            "Mutually exclusive with SDK and sim tools."
+        ),
+    )
+    if unitree_g1_real["tools_enabled"]:
+        unitree_g1["tools_enabled"] = False
+        unitree_g1_sim["tools_enabled"] = False
+    unitree_g1_real["deploy_dir"] = st.text_input(
+        "Real GR00T deploy directory",
+        value=unitree_g1_real.get("deploy_dir", "")
+        or env.get("UNITREE_G1_REAL_DEPLOY_DIR", ""),
+        help="Path to the real deploy directory that contains deploy.sh.",
+    )
+    unitree_g1_real["gr00t_root"] = st.text_input(
+        "Real GR00T-WholeBodyControl root",
+        value=unitree_g1_real.get("gr00t_root", "")
+        or env.get("GR00T_WBC_ROOT", ""),
+        help="Path used to run gear_sonic/scripts/sonic_encoder_input_player.py.",
+    )
+    unitree_g1_real["replay_dir"] = st.text_input(
+        "Real replay .npy directory",
+        value=unitree_g1_real.get("replay_dir", "replays/unitree_g1_sim")
+        or env.get("UNITREE_G1_REAL_REPLAY_DIR", "replays/unitree_g1_sim"),
+    )
+    real_start_cols = st.columns(4)
+    with real_start_cols[0]:
+        unitree_g1_real["auto_start"] = st.checkbox(
+            "Auto-start real manager",
+            value=bool(unitree_g1_real.get("auto_start", True)),
+        )
+    with real_start_cols[1]:
+        unitree_g1_real["confirm_deployment"] = st.checkbox(
+            "Send Y after real start",
+            value=bool(unitree_g1_real.get("confirm_deployment", True)),
+            help="Confirm the `Proceed with deployment` prompt.",
+        )
+    with real_start_cols[2]:
+        unitree_g1_real["start_control"] = st.checkbox(
+            "Send ] after real start",
+            value=bool(unitree_g1_real.get("start_control", True)),
+        )
+    with real_start_cols[3]:
+        unitree_g1_real["startup_settle_seconds"] = st.number_input(
+            "Real startup settle seconds",
+            min_value=0.0,
+            max_value=30.0,
+            value=float(unitree_g1_real.get("startup_settle_seconds", 2.0)),
+            step=0.5,
+        )
+    real_terminal_cols = st.columns(2)
+    with real_terminal_cols[0]:
+        unitree_g1_real["terminal_viewer"] = st.checkbox(
+            "Open real terminal viewer",
+            value=bool(unitree_g1_real.get("terminal_viewer", False)),
+            help="Open a terminal window that tails real manager/replay logs.",
+        )
+    with real_terminal_cols[1]:
+        unitree_g1_real["log_dir"] = st.text_input(
+            "Real terminal log directory",
+            value=unitree_g1_real.get("log_dir", "logs/unitree_g1_real")
+            or env.get("UNITREE_G1_REAL_LOG_DIR", "logs/unitree_g1_real"),
+        )
+    enabled_real_tools = set(
+        unitree_g1_real.get(
+            "enabled_tools",
+            [
+                "start",
+                "stop",
+                "status",
+                "perform_replay",
+                "list_replays",
+                "switch_interface",
+                "start_control",
+                "toggle_planner",
+                "keyboard",
+                "select_mode",
+                "adjust",
+                "compliance",
+            ],
+        )
+    )
+    st.caption("Choose which GR00T real manager tools are exposed to the agent.")
+    selected_real_tools: list[str] = []
+    for row_start in range(0, len(sim_tool_options), 5):
+        real_cols = st.columns(5)
+        for col, (tool_name, label) in zip(
+            real_cols, sim_tool_options[row_start : row_start + 5]
+        ):
+            with col:
+                enabled = st.checkbox(
+                    label,
+                    value=tool_name in enabled_real_tools,
+                    key=f"unitree_g1_real_tool_{tool_name}",
+                )
+                if enabled:
+                    selected_real_tools.append(tool_name)
+    unitree_g1_real["enabled_tools"] = selected_real_tools
+    env["UNITREE_G1_REAL_DEPLOY_DIR"] = unitree_g1_real["deploy_dir"]
+    env["GR00T_WBC_ROOT"] = unitree_g1_real["gr00t_root"]
+    env["UNITREE_G1_REAL_REPLAY_DIR"] = unitree_g1_real["replay_dir"]
+    env["UNITREE_G1_REAL_TERMINAL_VIEWER"] = str(
+        unitree_g1_real["terminal_viewer"]
+    ).lower()
+    env["UNITREE_G1_REAL_LOG_DIR"] = unitree_g1_real["log_dir"]
+    with st.expander(
+        "Terminal commands for Unitree G1 real",
+        expanded=bool(unitree_g1_real.get("tools_enabled", False)),
+    ):
+        st.code(
+            build_unitree_g1_real_terminal_commands(unitree_g1_real),
             language="bash",
         )
 
@@ -1015,6 +1216,35 @@ def preview_tab(config: dict[str, Any]) -> None:
         )
         if enabled_sim_tools:
             command.append(f"--unitree-g1-sim-enabled-tools {enabled_sim_tools}")
+    if config.get("unitree_g1_real", {}).get("tools_enabled"):
+        command.append("--unitree-g1-real-tools")
+        if config["unitree_g1_real"].get("deploy_dir"):
+            deploy_dir = shlex.quote(config["unitree_g1_real"]["deploy_dir"])
+            command.append(f"--unitree-g1-real-deploy-dir {deploy_dir}")
+        if config["unitree_g1_real"].get("gr00t_root"):
+            gr00t_root = shlex.quote(config["unitree_g1_real"]["gr00t_root"])
+            command.append(f"--unitree-g1-real-gr00t-root {gr00t_root}")
+        if config["unitree_g1_real"].get("replay_dir"):
+            replay_dir = shlex.quote(config["unitree_g1_real"]["replay_dir"])
+            command.append(f"--unitree-g1-real-replay-dir {replay_dir}")
+        if not config["unitree_g1_real"].get("auto_start", True):
+            command.append("--no-unitree-g1-real-auto-start")
+        if not config["unitree_g1_real"].get("confirm_deployment", True):
+            command.append("--no-unitree-g1-real-confirm-deployment")
+        if not config["unitree_g1_real"].get("start_control", True):
+            command.append("--no-unitree-g1-real-start-control")
+        settle_seconds = config["unitree_g1_real"].get("startup_settle_seconds", 2.0)
+        command.append(f"--unitree-g1-real-startup-settle-seconds {settle_seconds}")
+        if config["unitree_g1_real"].get("terminal_viewer", False):
+            command.append("--unitree-g1-real-terminal-viewer")
+        if config["unitree_g1_real"].get("log_dir"):
+            log_dir = shlex.quote(config["unitree_g1_real"]["log_dir"])
+            command.append(f"--unitree-g1-real-log-dir {log_dir}")
+        enabled_real_tools = ",".join(
+            config["unitree_g1_real"].get("enabled_tools", [])
+        )
+        if enabled_real_tools:
+            command.append(f"--unitree-g1-real-enabled-tools {enabled_real_tools}")
     if config.get("sensor_tool", {}).get("enabled"):
         command.append("--sensor-tools")
         command.append(f"--sensor-transport {config['sensor_tool']['transport']}")

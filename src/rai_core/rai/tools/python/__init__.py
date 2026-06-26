@@ -16,7 +16,14 @@ from .basic import calculate as calculate
 from .basic import get_basic_tools as get_basic_tools
 from .basic import get_current_time as get_current_time
 from .sensor_tool import get_sensor_tools as get_sensor_tools
-from .unitree_g1 import get_unitree_g1_tools as get_unitree_g1_tools
+from .unitree_g1_sdk import get_unitree_g1_tools as get_unitree_g1_tools
+from .unitree_g1_real import get_unitree_g1_real_tools as get_unitree_g1_real_tools
+from .unitree_g1_real import (
+    start_unitree_g1_real_manager as start_unitree_g1_real_manager,
+)
+from .unitree_g1_real import (
+    stop_unitree_g1_real_manager as stop_unitree_g1_real_manager,
+)
 from .unitree_g1_sim import get_unitree_g1_sim_tools as get_unitree_g1_sim_tools
 from .unitree_g1_sim import (
     start_unitree_g1_sim_manager as start_unitree_g1_sim_manager,
