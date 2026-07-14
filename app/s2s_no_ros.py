@@ -19,6 +19,7 @@ Stop with Ctrl+C.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -38,7 +39,9 @@ from rai.initialization.model_initialization import get_llm_model, load_config
 from rai.tools.python import (
     get_basic_tools,
     get_sensor_tools,
+    get_unitree_g1_real_runtime_prompt,
     get_unitree_g1_real_tools,
+    get_unitree_g1_sim_runtime_prompt,
     get_unitree_g1_sim_tools,
     get_unitree_g1_tools,
     start_unitree_g1_real_manager,
@@ -71,6 +74,51 @@ completed successfully. If a required tool is unavailable or fails, clearly say
 that the action was not performed. Ask for clarification before acting when a
 command is ambiguous. For non-action requests, answer normally without calling a
 robot control tool.
+
+If a tool returns an error observation, treat it as authoritative. If the error
+says a tool precondition failed, that tool was not executed; use the reported
+current state and allowed states to choose a valid next tool, or tell the user
+what state transition is needed.
+"""
+
+
+POLICY_DELEGATE_SYSTEM_PROMPT = """You are the robot's visual and voice interaction
+agent. Speak as the robot in the first person. A separate low-level policy agent
+executes navigation, manipulation, grasping, and other physical policies; you do
+not execute those policies yourself.
+
+Reply in the same language as the user, using short, natural sentences suitable
+for speech.
+
+When a request depends on the robot's surroundings, visible objects, people,
+locations, or an operation target, use the sensor camera tool to inspect the
+current scene before choosing a target. Base visual claims only on the returned
+camera observation. Identify targets precisely with useful attributes such as
+object type, color, and relative position. If multiple plausible targets are
+visible, ask the user which one they mean. If the target is not visible, say so
+and ask for clarification rather than inventing it.
+
+For a clear action request, describe the robot's accepted intent in the first
+person. For example: "我将抓取桌面右侧的红色可乐罐。" or "I will pick up the
+red cola can on the right side of the table." Do not say "the robot will", "I
+suggest that you", or "wait for a human to execute it". In this interaction,
+"I will ..." means that the request and target have been identified for the
+separate policy agent; it does not mean the physical action has completed.
+
+Do not call robot motion, navigation, manipulation, replay, VLA, or other
+physical-control tools. Do not mention internal agents, policies, tools, models,
+or system architecture to the user.
+
+Keep execution states distinct:
+- Before execution confirmation, say "I will ..." or "I am ready to ...".
+- Say "I am ..." only after an execution-start status has been received.
+- Say "I have ..." or that the task is complete only after an explicit success
+  status has been received from the low-level policy agent.
+- If an explicit failure status is received, truthfully say that the action
+  failed and briefly state the reported reason when useful.
+
+Normally respond in no more than two short sentences: first identify the target
+when needed, then state what you will do in the first person.
 """
 
 
@@ -87,23 +135,34 @@ UNITREE_G1_SDK_TOOLS_PROMPT = """Unitree G1 SDK tool policy:
 UNITREE_G1_SIM_TOOLS_PROMPT = """Unitree G1 simulation tool policy:
 - The robot is a GR00T WholeBodyControl Unitree G1 simulation controlled through
   the manager process. The runtime auto-starts `bash deploy.sh --input-type
-  manager sim` and sends `]` to enter control mode when sim tools are enabled.
-  Do not call the start tool again unless status shows the manager is not
-  running.
-- Prefer `unitree_g1_sim_perform_replay` for named motions and demonstrations.
-  Supported starter actions include `wave_left_hand`, `run`, and `squat_stand`
-  / `蹲起`. If unsure which replay is available, call
-  `unitree_g1_sim_list_replays` first.
-- `unitree_g1_sim_perform_replay` handles the full replay workflow: it switches
-  to ZMQ mode, sends ENTER, runs the latent `.npy` replay player, and returns to
-  keyboard mode after the replay finishes. Do not manually switch interfaces
-  around a replay unless a tool result says recovery is needed.
+  manager sim` and opens a control terminal when sim tools are enabled.
+- To start deployment, call `unitree_g1_sim_confirm_deployment`; it sends `Y`
+  and ENTER, waits for `Init Done`, then reports deployment completion. After
+  deployment is ready, call `unitree_g1_sim_start_control` to send `]` and enter
+  `keyboard_normal` before motion, replay, or VLA-style control.
+- Prefer `unitree_g1_sim_perform_skill` for named motions and demonstrations,
+  such as "wave left hand". If unsure which skills are configured, call
+  `unitree_g1_sim_list_skills` first.
+- `unitree_g1_sim_perform_skill` handles the full replay skill workflow: it
+  is valid only from `keyboard_normal` or `keyboard_planner`; it switches to
+  ZMQ mode with `#`, sends ENTER to enable streaming, runs the latent `.npy`
+  replay player in a separate shell, and returns to keyboard mode after the
+  replay finishes.
+- `unitree_g1_sim_perform_replay` is a lower-level compatibility tool. It also
+  is valid only from `zmq`; it sends ENTER to enable ZMQ streaming, runs the
+  latent `.npy` replay player in a separate shell, and returns to keyboard mode
+  after the replay finishes.
 - Use lower-level keyboard tools only for simple manual controls such as
-  forward/backward, turning, strafing, planner toggle, mode selection, speed, or
-  height adjustment.
-- Treat "stop", "停止", and "停下" as urgent. Use the sim stop manager tool for a
-  full emergency stop/exit, or the keyboard `instant_stop` action only when the
-  user specifically wants to halt planner momentum without exiting the manager.
+  forward/backward, turning, strafing, keyboard planner toggle, mode selection,
+  speed, or height adjustment.
+- Use `unitree_g1_sim_toggle_planner` only in keyboard mode. Use
+  `unitree_g1_sim_toggle_zmq_streaming` only in ZMQ mode; it presses ENTER to
+  toggle ZMQ streaming enabled/disabled. In `zmq_streaming`, pausing or
+  disabling streaming is `unitree_g1_sim_toggle_zmq_streaming`.
+- Treat "stop", "停止", and "停下" as urgent. Do not stop the manager terminal
+  yourself. Use the keyboard `instant_stop` action only when the user
+  specifically wants to halt planner momentum without exiting the manager.
+  Never send `O`; that is reserved for the human operator in the terminal.
 - If a replay `.npy` file is missing, say which replay file is missing and ask
   the user to add it to the configured replay directory.
 """
@@ -111,24 +170,64 @@ UNITREE_G1_SIM_TOOLS_PROMPT = """Unitree G1 simulation tool policy:
 
 UNITREE_G1_REAL_TOOLS_PROMPT = """Unitree G1 real robot manager tool policy:
 - These tools control a physical Unitree G1 through the GR00T WholeBodyControl
-  manager process. Treat commands such as "stop", "停止", and "停下" as urgent
-  and call the stop tool immediately.
-- Use `unitree_g1_real_perform_replay` only for clear, safe named motion
-  requests. Never claim a motion ran unless the tool completed successfully.
+  manager process. Treat commands such as "stop", "停止", and "停下" as urgent,
+  but do not stop the manager terminal yourself. Tell the user to use the
+  visible terminal/operator controls for safety-critical stop actions.
+- Prefer `unitree_g1_real_perform_skill` for clear, safe named motion requests.
+  A real skill may be backed by a replay file or by a VLA model/prompt pair.
+  Never claim a motion ran unless the tool completed successfully. Replay-backed skills are
+  valid only from `keyboard_normal` or `keyboard_planner`; they switch to ZMQ
+  with `#`, send ENTER to enable streaming, and run the replay player in a
+  separate shell.
+- VLA-backed skills are valid only from `keyboard_normal` or `keyboard_planner`;
+  they switch to ZMQ streaming, start the configured GR00T server, then start
+  the WBC VLA inference client with the configured prompt.
+- `unitree_g1_real_perform_replay` is valid only from `zmq`; it sends ENTER to
+  enable ZMQ streaming, then runs the replay player in a separate shell.
 - The runtime can auto-start `source scripts/setup_env.sh && ./deploy.sh
-  --input-type manager --zmq-host localhost --hand-type inspire real` when real
-  tools are enabled.
-- If a replay `.npy` file is missing, say which replay file is missing and ask
-  the user to add it to the configured replay directory.
+  --input-type manager --zmq-host localhost --hand-type inspire real` and opens
+  a control terminal when real tools are enabled.
+- To start deployment, call `unitree_g1_real_confirm_deployment`; it sends `Y`
+  and ENTER, waits for `Init Done`, then reports deployment completion. After
+  deployment is ready, call `unitree_g1_real_start_control` to send `]` and enter
+  `keyboard_normal` before replay or VLA skills.
+- If unsure which real skills are configured, call
+  `unitree_g1_real_list_skills` first.
+- Use `unitree_g1_real_toggle_planner` only in keyboard mode. Use
+  `unitree_g1_real_toggle_zmq_streaming` only in ZMQ mode; it presses ENTER to
+  toggle ZMQ streaming enabled/disabled. In `zmq_streaming`, pausing or
+  disabling streaming is `unitree_g1_real_toggle_zmq_streaming`.
+- Never send `O`; that is reserved for the human operator in the terminal.
+- If a replay file is missing, say which replay file is missing and ask the
+  user to add it to the configured replay path.
 """
 
 
 def build_system_prompt(args: argparse.Namespace) -> str:
+    if getattr(args, "agent_mode", "standard") == "policy_delegate":
+        return POLICY_DELEGATE_SYSTEM_PROMPT
+
     prompt_parts = [S2S_BASE_SYSTEM_PROMPT]
     if args.unitree_g1_real_tools:
         prompt_parts.append(UNITREE_G1_REAL_TOOLS_PROMPT)
+        prompt_parts.append(
+            get_unitree_g1_real_runtime_prompt(
+                deploy_dir=args.unitree_g1_real_deploy_dir,
+                replay_dir=args.unitree_g1_real_replay_dir,
+                skills=_parse_skills(args.unitree_g1_real_skills),
+                enabled_tools=_parse_csv(args.unitree_g1_real_enabled_tools),
+            )
+        )
     elif args.unitree_g1_sim_tools:
         prompt_parts.append(UNITREE_G1_SIM_TOOLS_PROMPT)
+        prompt_parts.append(
+            get_unitree_g1_sim_runtime_prompt(
+                deploy_dir=args.unitree_g1_sim_deploy_dir,
+                replay_dir=args.unitree_g1_sim_replay_dir,
+                skills=_parse_skills(args.unitree_g1_sim_skills),
+                enabled_tools=_parse_csv(args.unitree_g1_sim_enabled_tools),
+            )
+        )
     elif args.unitree_g1_tools:
         prompt_parts.append(UNITREE_G1_SDK_TOOLS_PROMPT)
     return "\n\n".join(prompt_parts)
@@ -139,6 +238,22 @@ def _parse_csv(value: Optional[str]) -> Optional[list[str]]:
         return None
     items = [item.strip() for item in value.split(",")]
     return [item for item in items if item]
+
+
+def _parse_skills(value: Any) -> Optional[list[dict[str, Any]]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        parsed = json.loads(stripped)
+        if not isinstance(parsed, list):
+            raise ValueError("Skill JSON must be a list of skill objects.")
+        return parsed
+    raise TypeError(f"Unsupported skill config type: {type(value).__name__}")
 
 
 def load_raw_config(config_path: str) -> dict[str, Any]:
@@ -172,6 +287,25 @@ def config_get(config: dict[str, Any], section: str, key: str, default: Any) -> 
     return config.get(section, {}).get(key, default)
 
 
+def apply_vla_server_root_to_skills(
+    skills: Any,
+    server_root: str,
+) -> Any:
+    if not isinstance(skills, list) or not server_root:
+        return skills
+    updated: list[dict[str, Any]] = []
+    for raw_skill in skills:
+        if not isinstance(raw_skill, dict):
+            updated.append(raw_skill)
+            continue
+        skill = dict(raw_skill)
+        if str(skill.get("source", "")).strip().lower() == "vla":
+            skill["server_root"] = server_root
+            skill.pop("wbc_root", None)
+        updated.append(skill)
+    return updated
+
+
 def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argparse.Namespace:
     s2s = raw_config.get("s2s", {})
     tools = raw_config.get("tools", {})
@@ -185,7 +319,13 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
     tts = raw_config.get("tts", {})
     doubao = raw_config.get("doubao_speech", {})
 
+    unitree_g1_real_skills = apply_vla_server_root_to_skills(
+        unitree_g1_real.get("skills"),
+        unitree_g1_real.get("vla_server_root", ""),
+    )
+
     defaults = {
+        "agent_mode": s2s.get("agent_mode", "standard"),
         "mic_device": s2s.get("mic_device", "default"),
         "speaker_device": s2s.get("speaker_device", "default"),
         "speaker_backend": s2s.get("speaker_backend", "sounddevice"),
@@ -245,7 +385,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         ),
         "unitree_g1_sim_terminal_viewer": unitree_g1_sim.get(
             "terminal_viewer",
-            False,
+            True,
         ),
         "unitree_g1_sim_log_dir": unitree_g1_sim.get(
             "log_dir",
@@ -255,13 +395,15 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
             unitree_g1_sim.get(
                 "enabled_tools",
                 [
-                    "start",
-                    "stop",
-                    "status",
+                    "confirm_deployment",
+                    "perform_skill",
                     "perform_replay",
+                    "list_skills",
                     "list_replays",
-                    "switch_interface",
                     "start_control",
+                    "switch_zmq",
+                    "switch_keyboard",
+                    "toggle_zmq_streaming",
                     "toggle_planner",
                     "keyboard",
                     "select_mode",
@@ -270,6 +412,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
                 ],
             )
         ),
+        "unitree_g1_sim_skills": unitree_g1_sim.get("skills"),
         "unitree_g1_real_tools": unitree_g1_real.get("tools_enabled", False),
         "unitree_g1_real_deploy_dir": unitree_g1_real.get("deploy_dir", ""),
         "unitree_g1_real_gr00t_root": unitree_g1_real.get("gr00t_root", ""),
@@ -289,7 +432,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
         ),
         "unitree_g1_real_terminal_viewer": unitree_g1_real.get(
             "terminal_viewer",
-            False,
+            True,
         ),
         "unitree_g1_real_log_dir": unitree_g1_real.get(
             "log_dir",
@@ -299,13 +442,15 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
             unitree_g1_real.get(
                 "enabled_tools",
                 [
-                    "start",
-                    "stop",
-                    "status",
+                    "confirm_deployment",
+                    "perform_skill",
                     "perform_replay",
+                    "list_skills",
                     "list_replays",
-                    "switch_interface",
                     "start_control",
+                    "switch_zmq",
+                    "switch_keyboard",
+                    "toggle_zmq_streaming",
                     "toggle_planner",
                     "keyboard",
                     "select_mode",
@@ -314,6 +459,7 @@ def resolve_args(args: argparse.Namespace, raw_config: dict[str, Any]) -> argpar
                 ],
             )
         ),
+        "unitree_g1_real_skills": unitree_g1_real_skills,
         "unitree_g1_audio_enabled": unitree_g1_audio.get("enabled", False),
         "unitree_g1_audio_network_interface": unitree_g1_audio.get("network_interface", ""),
         "unitree_g1_audio_app_name": unitree_g1_audio.get("app_name", "rai_s2s"),
@@ -487,6 +633,12 @@ def parse_args() -> argparse.Namespace:
         "--config",
         default="config.toml",
         help="Path to config.toml (default: config.toml)",
+    )
+    parser.add_argument(
+        "--agent-mode",
+        choices=["standard", "policy_delegate"],
+        default=None,
+        help="Agent behavior mode (default: [s2s].agent_mode)",
     )
     parser.add_argument(
         "--mic-device",
@@ -688,9 +840,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Comma-separated sim manager tools to enable: "
-            "start,stop,status,perform_replay,list_replays,switch_interface,"
-            "start_control,toggle_planner,keyboard,select_mode,adjust,compliance"
+            "confirm_deployment,perform_skill,perform_replay,"
+            "list_skills,list_replays,start_control,switch_zmq,switch_keyboard,"
+            "toggle_zmq_streaming,toggle_planner,keyboard,select_mode,adjust,"
+            "compliance"
         ),
+    )
+    parser.add_argument(
+        "--unitree-g1-sim-skills-json",
+        dest="unitree_g1_sim_skills",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--unitree-g1-real-tools",
@@ -711,7 +871,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--unitree-g1-real-replay-dir",
         default=None,
-        help="Directory containing Unitree G1 real replay .npy files",
+        help="Directory containing Unitree G1 real replay files",
     )
     parser.add_argument(
         "--unitree-g1-real-auto-start",
@@ -753,9 +913,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Comma-separated real manager tools to enable: "
-            "start,stop,status,perform_replay,list_replays,switch_interface,"
-            "start_control,toggle_planner,keyboard,select_mode,adjust,compliance"
+            "confirm_deployment,perform_skill,perform_replay,"
+            "list_skills,list_replays,start_control,switch_zmq,switch_keyboard,"
+            "toggle_zmq_streaming,toggle_planner,keyboard,select_mode,adjust,"
+            "compliance"
         ),
+    )
+    parser.add_argument(
+        "--unitree-g1-real-skills-json",
+        dest="unitree_g1_real_skills",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--unitree-g1-audio-enabled",
@@ -894,6 +1062,7 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 gr00t_root=args.unitree_g1_sim_gr00t_root,
                 replay_dir=args.unitree_g1_sim_replay_dir,
                 enabled_tools=_parse_csv(args.unitree_g1_sim_enabled_tools),
+                skills=_parse_skills(args.unitree_g1_sim_skills),
                 terminal_viewer=args.unitree_g1_sim_terminal_viewer,
                 log_dir=args.unitree_g1_sim_log_dir,
             )
@@ -905,6 +1074,7 @@ def build_tools(args: argparse.Namespace) -> tuple[list[BaseTool], Any]:
                 gr00t_root=args.unitree_g1_real_gr00t_root,
                 replay_dir=args.unitree_g1_real_replay_dir,
                 enabled_tools=_parse_csv(args.unitree_g1_real_enabled_tools),
+                skills=_parse_skills(args.unitree_g1_real_skills),
                 terminal_viewer=args.unitree_g1_real_terminal_viewer,
                 log_dir=args.unitree_g1_real_log_dir,
             )
@@ -979,10 +1149,10 @@ def main() -> int:
         try:
             startup_message = start_unitree_g1_sim_manager(
                 deploy_dir=args.unitree_g1_sim_deploy_dir,
-                confirm_deployment=args.unitree_g1_sim_confirm_deployment,
-                start_control=args.unitree_g1_sim_start_control,
+                confirm_deployment=False,
+                start_control=False,
                 settle_seconds=args.unitree_g1_sim_startup_settle_seconds,
-                terminal_viewer=args.unitree_g1_sim_terminal_viewer,
+                terminal_viewer=True,
                 log_dir=args.unitree_g1_sim_log_dir,
             )
             logging.info("Unitree G1 sim manager startup:\n%s", startup_message)
@@ -994,10 +1164,10 @@ def main() -> int:
         try:
             startup_message = start_unitree_g1_real_manager(
                 deploy_dir=args.unitree_g1_real_deploy_dir,
-                confirm_deployment=args.unitree_g1_real_confirm_deployment,
-                start_control=args.unitree_g1_real_start_control,
+                confirm_deployment=False,
+                start_control=False,
                 settle_seconds=args.unitree_g1_real_startup_settle_seconds,
-                terminal_viewer=args.unitree_g1_real_terminal_viewer,
+                terminal_viewer=True,
                 log_dir=args.unitree_g1_real_log_dir,
             )
             logging.info("Unitree G1 real manager startup:\n%s", startup_message)

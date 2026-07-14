@@ -193,11 +193,21 @@ Then enable `Unitree G1 Sim Manager Tools` in the configurator and set:
 - `GR00T-WholeBodyControl root`: the repo root used to run
   `gear_sonic/scripts/sonic_encoder_input_player.py`
 - `Replay .npy directory`: a directory containing latent replay files
+- `Open terminal viewer`: opens a desktop terminal that shows manager/replay
+  output while the backend keeps the controllable PTY
 
 When the S2S agent starts with `--unitree-g1-sim-tools`, it automatically starts
-the deployment process and sends `]` to enter control mode:
+the deployment process and opens the terminal viewer. It does not automatically
+send `Y` or `]`; those are exposed as separate tools:
+
+- `unitree_g1_sim_confirm_deployment`: sends `Y` and ENTER, then waits for
+  `Init Done`
+- `unitree_g1_sim_start_control`: sends `]`
+- `unitree_g1_sim_switch_zmq`: sends `#`
+- `unitree_g1_sim_switch_keyboard`: sends `!`
 
 ```bash
+source scripts/setup_env.sh
 bash deploy.sh --input-type manager sim
 ```
 
@@ -208,8 +218,14 @@ uv run python app/s2s_no_ros.py \
   --unitree-g1-sim-tools \
   --unitree-g1-sim-deploy-dir /home/ljc/GR00T-WholeBodyControl/gear_sonic_deploy \
   --unitree-g1-sim-gr00t-root /home/ljc/GR00T-WholeBodyControl \
-  --unitree-g1-sim-replay-dir replays/unitree_g1_sim
+  --unitree-g1-sim-replay-dir replays/unitree_g1_sim \
+  --unitree-g1-sim-terminal-viewer
 ```
+
+The terminal viewer displays the executed shell commands and live process output
+from `logs/unitree_g1_sim/manager.log` and
+`logs/unitree_g1_sim/replay_player.log`. If no desktop terminal emulator is
+available, run `tail -f logs/unitree_g1_sim/manager.log` manually.
 
 For named motions, put real latent `.npy` files in
 `replays/unitree_g1_sim/` or point `--unitree-g1-sim-replay-dir` to your own
@@ -221,8 +237,9 @@ folder. Starter names are declared in
 - `squat_stand.npy`
 
 The high-level `unitree_g1_sim_perform_replay` tool maps requests such as
-"wave left hand", "run", or "蹲起" to those files. It switches the manager to
-ZMQ mode (`#`), sends ENTER, then starts a separate shell process equivalent to:
+"wave left hand", "run", or "蹲起" to those files. It sends `]`, waits 1
+second, switches the manager to ZMQ mode (`#`), sends ENTER, then starts a
+separate shell process equivalent to:
 
 ```bash
 cd /home/ljc/GR00T-WholeBodyControl
@@ -231,9 +248,14 @@ python gear_sonic/scripts/sonic_encoder_input_player.py \
   --latent-input-file /path/to/replays/unitree_g1_sim/wave_left_hand.npy
 ```
 
+When the replay shell prints `[EncoderInputPlayer] Stopped`, the tool closes
+that shell and switches the manager back to keyboard mode (`!`).
+
 Lower-level tool groups are still available for process lifecycle (`start`,
-`stop`, `status`), manager interface switching (`keyboard`, `gamepad`, `zmq`,
-`ros2`), control startup (`]`), planner toggle (ENTER), keyboard motion
-commands (`WASD`, `T/R/P/N`, `Q/E`, `,/.`), planner mode selection (`1`-`8`),
-speed/height adjustment, and hand compliance controls. Say "stop" or "停止" to
-trigger the sim manager stop tool; it sends `O` before terminating the process.
+`stop`, `status`), deployment confirmation (`Y` + ENTER), manager interface
+switching (`keyboard`, `gamepad`, `zmq`, `ros2`, plus direct `#` and `!`
+tools), control startup (`]`), planner toggle (ENTER), keyboard motion commands
+(`WASD`, `T/R/P/N`, `Q/E`, `,/.`), planner mode selection (`1`-`8`),
+speed/height adjustment, and hand compliance controls. The agent does not send
+`O`; emergency stop remains reserved for the human operator typing in the
+terminal.

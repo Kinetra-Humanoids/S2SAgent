@@ -54,6 +54,60 @@ DOUBAO_ASR_RESOURCE_OPTIONS = [
     "volc.bigasr.auc_turbo",
     "volc.bigasr.auc",
 ]
+DEFAULT_UNITREE_G1_REAL_REPLAY_FILE = (
+    "/home/zj/Agent/data/2026-05-23-13-59-19-filtered/data/chunk-000/"
+    "episode_000000.parquet"
+)
+DEFAULT_UNITREE_G1_VLA_MODEL_PATH = (
+    "/home/zj/Isaac-GR00T/test_ckpt/"
+    "gr00t-freeze-vlm-half-expert-param-cola-644-binary-hand-bs96-0705/"
+    "checkpoint-60000"
+)
+DEFAULT_UNITREE_G1_VLA_PROMPT = (
+    "Walk forward, grab the cola and throw into the trash bin"
+)
+DEFAULT_UNITREE_G1_VLA_SERVER_ROOT = "/home/zj/Isaac-GR00T"
+DEFAULT_UNITREE_G1_SIM_SKILLS = [
+    {
+        "name": "wave left hand",
+        "source": "replay",
+        "file": "wave_left_hand.npy",
+        "aliases": ["wave", "left hand wave", "wave_left_hand"],
+        "description": "Wave the left hand using a replay trajectory.",
+    },
+    {
+        "name": "run",
+        "source": "replay",
+        "file": "run.npy",
+        "aliases": ["running"],
+        "description": "Run using a replay trajectory.",
+    },
+    {
+        "name": "squat stand",
+        "source": "replay",
+        "file": "squat_stand.npy",
+        "aliases": ["squat_to_stand", "蹲起"],
+        "description": "Squat down and stand up using a replay trajectory.",
+    },
+]
+DEFAULT_UNITREE_G1_REAL_SKILLS = [
+    {
+        "name": "wave left hand",
+        "source": "replay",
+        "file": DEFAULT_UNITREE_G1_REAL_REPLAY_FILE,
+        "aliases": ["wave", "left hand wave", "wave_left_hand"],
+        "description": "Wave the left hand using a replay trajectory.",
+    },
+    {
+        "name": "wave left hand with vla",
+        "source": "vla",
+        "prompt": DEFAULT_UNITREE_G1_VLA_PROMPT,
+        "server_root": DEFAULT_UNITREE_G1_VLA_SERVER_ROOT,
+        "model_path": DEFAULT_UNITREE_G1_VLA_MODEL_PATH,
+        "aliases": [],
+        "description": "Run the configured VLA policy through GR00T server and WBC inference.",
+    },
+]
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "vendor": {
@@ -90,6 +144,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "langsmith": {"use_langsmith": False, "host": "https://api.smith.langchain.com"},
     },
     "s2s": {
+        "agent_mode": "standard",
         "mic_device": "default",
         "speaker_device": "default",
         "speaker_backend": "sounddevice",
@@ -136,48 +191,55 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "confirm_deployment": True,
         "start_control": True,
         "startup_settle_seconds": 2.0,
-        "terminal_viewer": False,
+        "terminal_viewer": True,
         "log_dir": "logs/unitree_g1_sim",
         "enabled_tools": [
-            "start",
-            "stop",
-            "status",
+            "confirm_deployment",
+            "perform_skill",
             "perform_replay",
+            "list_skills",
             "list_replays",
-            "switch_interface",
             "start_control",
+            "switch_zmq",
+            "switch_keyboard",
+            "toggle_zmq_streaming",
             "toggle_planner",
             "keyboard",
             "select_mode",
             "adjust",
             "compliance",
         ],
+        "skills": deepcopy(DEFAULT_UNITREE_G1_SIM_SKILLS),
     },
     "unitree_g1_real": {
         "tools_enabled": False,
         "deploy_dir": "",
         "gr00t_root": "",
+        "vla_server_root": DEFAULT_UNITREE_G1_VLA_SERVER_ROOT,
         "replay_dir": "replays/unitree_g1_sim",
         "auto_start": True,
         "confirm_deployment": True,
         "start_control": True,
         "startup_settle_seconds": 2.0,
-        "terminal_viewer": False,
+        "terminal_viewer": True,
         "log_dir": "logs/unitree_g1_real",
         "enabled_tools": [
-            "start",
-            "stop",
-            "status",
+            "confirm_deployment",
+            "perform_skill",
             "perform_replay",
+            "list_skills",
             "list_replays",
-            "switch_interface",
             "start_control",
+            "switch_zmq",
+            "switch_keyboard",
+            "toggle_zmq_streaming",
             "toggle_planner",
             "keyboard",
             "select_mode",
             "adjust",
             "compliance",
         ],
+        "skills": deepcopy(DEFAULT_UNITREE_G1_REAL_SKILLS),
     },
     "sensor_tool": {
         "enabled": False,
@@ -304,13 +366,13 @@ def save_env(values: dict[str, str]) -> None:
         "UNITREE_G1_SIM_REPLAY_DIR="
         f'"{existing.get("UNITREE_G1_SIM_REPLAY_DIR", "replays/unitree_g1_sim")}"',
         "UNITREE_G1_SIM_TERMINAL_VIEWER="
-        f'"{existing.get("UNITREE_G1_SIM_TERMINAL_VIEWER", "false")}"',
+        f'"{existing.get("UNITREE_G1_SIM_TERMINAL_VIEWER", "true")}"',
         f'UNITREE_G1_SIM_LOG_DIR="{existing.get("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim")}"',
         f'UNITREE_G1_REAL_DEPLOY_DIR="{existing.get("UNITREE_G1_REAL_DEPLOY_DIR", "")}"',
         "UNITREE_G1_REAL_REPLAY_DIR="
         f'"{existing.get("UNITREE_G1_REAL_REPLAY_DIR", "replays/unitree_g1_sim")}"',
         "UNITREE_G1_REAL_TERMINAL_VIEWER="
-        f'"{existing.get("UNITREE_G1_REAL_TERMINAL_VIEWER", "false")}"',
+        f'"{existing.get("UNITREE_G1_REAL_TERMINAL_VIEWER", "true")}"',
         f'UNITREE_G1_REAL_LOG_DIR="{existing.get("UNITREE_G1_REAL_LOG_DIR", "logs/unitree_g1_real")}"',
         "",
     ]
@@ -327,6 +389,86 @@ def select_option(label: str, options: list[str], current: str) -> str:
     all_options = options_with_current(options, current)
     index = all_options.index(current) if current in all_options else 0
     return st.selectbox(label, all_options, index=index)
+
+
+def resolve_replay_file(replay_dir: str, replay_file: str) -> Path:
+    path = Path(replay_file)
+    replay_root = Path(replay_dir or "replays/unitree_g1_sim").expanduser().resolve()
+    if path.is_absolute():
+        default_path = replay_root / path.name
+        return default_path if default_path.exists() else path.expanduser()
+    return replay_root / path
+
+
+def replay_command_for_file(replay_file: Path) -> list[str]:
+    if replay_file.suffix == ".parquet":
+        return [
+            "python gear_sonic/scripts/sonic_encoder_input_player_with_hand.py \\",
+            f"  --parquet-file {shlex.quote(str(replay_file))}",
+        ]
+    return [
+        "python gear_sonic/scripts/sonic_encoder_input_player.py \\",
+        f"  --latent-input-file {shlex.quote(str(replay_file))}",
+    ]
+
+
+def get_replay_skill_file(
+    skills: list[dict[str, Any]],
+    skill_name: str,
+    default: str,
+) -> str:
+    normalized_name = skill_name.strip().lower()
+    for skill in skills:
+        if (
+            str(skill.get("name", "")).strip().lower() == normalized_name
+            and str(skill.get("source", "replay")).strip().lower() == "replay"
+        ):
+            return str(skill.get("file", "") or default)
+    return default
+
+
+def set_replay_skill_file(
+    skills: list[dict[str, Any]],
+    skill_name: str,
+    replay_file: str,
+) -> list[dict[str, Any]]:
+    normalized_name = skill_name.strip().lower()
+    updated = deepcopy(skills)
+    for skill in updated:
+        if str(skill.get("name", "")).strip().lower() == normalized_name:
+            skill["source"] = "replay"
+            skill["file"] = replay_file
+            return updated
+    updated.append(
+        {
+            "name": skill_name,
+            "source": "replay",
+            "file": replay_file,
+            "aliases": ["wave", "left hand wave", "wave_left_hand"],
+            "description": "Wave the left hand using a replay trajectory.",
+        }
+    )
+    return updated
+
+
+def first_vla_skill(skills: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for skill in skills:
+        if str(skill.get("source", "")).strip().lower() == "vla":
+            return skill
+    return None
+
+
+def apply_vla_server_root(
+    skills: list[dict[str, Any]],
+    server_root: str,
+) -> list[dict[str, Any]]:
+    updated = deepcopy(skills)
+    for skill in updated:
+        if str(skill.get("source", "")).strip().lower() == "vla":
+            if server_root:
+                skill["server_root"] = server_root
+            skill.pop("wbc_root", None)
+    return updated
 
 
 def get_sound_devices(output: bool = False) -> list[str]:
@@ -401,6 +543,16 @@ def build_unitree_g1_real_terminal_commands(unitree_g1_real: dict[str, Any]) -> 
     gr00t_root = unitree_g1_real.get("gr00t_root", "")
     replay_dir = unitree_g1_real.get("replay_dir", "replays/unitree_g1_sim")
     log_dir = unitree_g1_real.get("log_dir", "logs/unitree_g1_real")
+    skills = unitree_g1_real.get("skills", DEFAULT_UNITREE_G1_REAL_SKILLS)
+    vla_skill = first_vla_skill(skills)
+    replay_file = resolve_replay_file(
+        replay_dir,
+        get_replay_skill_file(
+            skills,
+            "wave left hand",
+            DEFAULT_UNITREE_G1_REAL_REPLAY_FILE,
+        ),
+    )
     lines = [
         "# 1. The S2S tool backend starts the real Unitree G1 manager with:",
     ]
@@ -419,14 +571,56 @@ def build_unitree_g1_real_terminal_commands(unitree_g1_real: dict[str, Any]) -> 
     lines.extend(
         [
             "source .venv_teleop/bin/activate",
-            "python gear_sonic/scripts/sonic_encoder_input_player.py \\",
-            f"  --latent-input-file {shlex.quote(str(Path(replay_dir) / 'wave_left_hand.npy'))}",
+            *replay_command_for_file(replay_file),
             "",
             "# 3. To watch backend terminal output manually:",
             f"tail -f {shlex.quote(str(Path(log_dir) / 'manager.log'))}",
             f"tail -f {shlex.quote(str(Path(log_dir) / 'replay_player.log'))}",
         ]
     )
+    if vla_skill is not None:
+        vla_server_root = str(
+            unitree_g1_real.get("vla_server_root", DEFAULT_UNITREE_G1_VLA_SERVER_ROOT)
+            or DEFAULT_UNITREE_G1_VLA_SERVER_ROOT
+        )
+        vla_wbc_root = str(gr00t_root or "/home/zj/GR00T-WholeBodyControl")
+        lines.extend(
+            [
+                "",
+                "# 4. For VLA skills, the backend starts the GR00T server with:",
+                f"cd {shlex.quote(vla_server_root)}",
+                "source .venv/bin/activate",
+                "export HF_HUB_OFFLINE=1",
+                "export TRANSFORMERS_OFFLINE=1",
+                "export NO_ALBUMENTATIONS_UPDATE=1",
+                "python gr00t/eval/run_gr00t_server.py \\",
+                f"  --model-path {shlex.quote(str(vla_skill.get('model_path', DEFAULT_UNITREE_G1_VLA_MODEL_PATH)))} \\",
+                "  --embodiment-tag NEW_EMBODIMENT \\",
+                "  --device cuda:0 \\",
+                "  --port 5550",
+                "",
+                "# 5. Then it starts WBC VLA inference with:",
+            ]
+        )
+        lines.append(f"cd {shlex.quote(vla_wbc_root)}")
+        lines.extend(
+            [
+                "source .venv_inference/bin/activate",
+                "python gear_sonic/scripts/run_vla_inference.py \\",
+                "  --host localhost \\",
+                "  --port 5550 \\",
+                "  --embodiment-tag NEW_EMBODIMENT \\",
+                f"  --prompt {shlex.quote(str(vla_skill.get('prompt', DEFAULT_UNITREE_G1_VLA_PROMPT)))} \\",
+                "  --action-publish-rate 50 \\",
+                "  --action-horizon 50 \\",
+                "  --camera-host 192.168.123.164 \\",
+                "  --camera-port 5555",
+                "",
+                "# 6. To watch VLA output manually:",
+                f"tail -f {shlex.quote(str(Path(log_dir) / 'vla_server.log'))}",
+                f"tail -f {shlex.quote(str(Path(log_dir) / 'vla_inference.log'))}",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -446,6 +640,88 @@ def disable_sdk_sim_tools_when_real_enabled() -> None:
     if st.session_state.get("unitree_g1_real_tools_enabled", False):
         st.session_state.unitree_g1_tools_enabled = False
         st.session_state.unitree_g1_sim_tools_enabled = False
+
+
+def normalize_skill_rows(rows: Any, *, allow_vla: bool) -> list[dict[str, Any]]:
+    if hasattr(rows, "to_dict"):
+        rows = rows.to_dict("records")
+    skills: list[dict[str, Any]] = []
+    allowed_sources = {"replay", "vla"} if allow_vla else {"replay"}
+    for row in rows:
+        name = str(row.get("name", "")).strip()
+        if not name:
+            continue
+        source = str(row.get("source", "replay") or "replay").strip().lower()
+        if source not in allowed_sources:
+            source = "replay"
+        aliases_value = row.get("aliases", "")
+        if isinstance(aliases_value, list):
+            aliases = [str(alias).strip() for alias in aliases_value]
+        else:
+            aliases = [alias.strip() for alias in str(aliases_value).split(",")]
+        skill: dict[str, Any] = {
+            "name": name,
+            "source": source,
+            "aliases": [alias for alias in aliases if alias],
+        }
+        replay_file = str(row.get("file", "")).strip()
+        prompt = str(row.get("prompt", "")).strip()
+        model_path = str(row.get("model_path", "")).strip()
+        description = str(row.get("description", "")).strip()
+        if replay_file:
+            skill["file"] = replay_file
+        if prompt:
+            skill["prompt"] = prompt
+        if model_path:
+            skill["model_path"] = model_path
+        if description:
+            skill["description"] = description
+        skills.append(skill)
+    return skills
+
+
+def unitree_skill_editor(
+    label: str,
+    skills: list[dict[str, Any]],
+    *,
+    key: str,
+    allow_vla: bool,
+) -> list[dict[str, Any]]:
+    rows = []
+    for skill in skills:
+        aliases = skill.get("aliases", [])
+        rows.append(
+            {
+                "name": skill.get("name", ""),
+                "source": skill.get("source", "replay"),
+                "file": skill.get("file", ""),
+                "prompt": skill.get("prompt", ""),
+                "model_path": skill.get("model_path", ""),
+                "aliases": ", ".join(aliases) if isinstance(aliases, list) else aliases,
+                "description": skill.get("description", ""),
+            }
+        )
+    edited_rows = st.data_editor(
+        rows,
+        key=key,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "source": st.column_config.SelectboxColumn(
+                "source",
+                options=["replay", "vla"] if allow_vla else ["replay"],
+                required=True,
+            ),
+            "name": st.column_config.TextColumn("name", required=True),
+            "file": st.column_config.TextColumn("file"),
+            "prompt": st.column_config.TextColumn("prompt"),
+            "model_path": st.column_config.TextColumn("model_path"),
+            "aliases": st.column_config.TextColumn("aliases"),
+            "description": st.column_config.TextColumn("description"),
+        },
+    )
+    st.caption(label)
+    return normalize_skill_rows(edited_rows, allow_vla=allow_vla)
 
 
 def model_tab(config: dict[str, Any]) -> None:
@@ -543,6 +819,23 @@ def s2s_tab(config: dict[str, Any]) -> None:
     doubao = config["doubao_speech"]
     unitree_g1_audio = config["unitree_g1_audio"]
     env = st.session_state.env
+
+    agent_mode_options = ["standard", "policy_delegate"]
+    current_agent_mode = s2s.get("agent_mode", "standard")
+    s2s["agent_mode"] = st.selectbox(
+        "Agent mode",
+        agent_mode_options,
+        index=(
+            agent_mode_options.index(current_agent_mode)
+            if current_agent_mode in agent_mode_options
+            else 0
+        ),
+        help=(
+            "policy_delegate makes the S2S agent identify visual targets and speak "
+            "as the robot in the first person while a separate low-level agent "
+            "executes physical policies."
+        ),
+    )
 
     cols = st.columns(2)
     with cols[0]:
@@ -858,24 +1151,13 @@ def tools_tab(config: dict[str, Any]) -> None:
         value=unitree_g1_sim.get("replay_dir", "replays/unitree_g1_sim")
         or env.get("UNITREE_G1_SIM_REPLAY_DIR", "replays/unitree_g1_sim"),
     )
-    sim_start_cols = st.columns(4)
+    sim_start_cols = st.columns(2)
     with sim_start_cols[0]:
         unitree_g1_sim["auto_start"] = st.checkbox(
             "Auto-start manager",
             value=bool(unitree_g1_sim.get("auto_start", True)),
         )
     with sim_start_cols[1]:
-        unitree_g1_sim["confirm_deployment"] = st.checkbox(
-            "Send Y after start",
-            value=bool(unitree_g1_sim.get("confirm_deployment", True)),
-            help="Confirm the `Proceed with deployment` prompt.",
-        )
-    with sim_start_cols[2]:
-        unitree_g1_sim["start_control"] = st.checkbox(
-            "Send ] after start",
-            value=bool(unitree_g1_sim.get("start_control", True)),
-        )
-    with sim_start_cols[3]:
         unitree_g1_sim["startup_settle_seconds"] = st.number_input(
             "Startup settle seconds",
             min_value=0.0,
@@ -887,8 +1169,8 @@ def tools_tab(config: dict[str, Any]) -> None:
     with sim_terminal_cols[0]:
         unitree_g1_sim["terminal_viewer"] = st.checkbox(
             "Open terminal viewer",
-            value=bool(unitree_g1_sim.get("terminal_viewer", False)),
-            help="Open a terminal window that tails manager/replay logs.",
+            value=bool(unitree_g1_sim.get("terminal_viewer", True)),
+            help="Open a terminal window when the manager starts.",
         )
     with sim_terminal_cols[1]:
         unitree_g1_sim["log_dir"] = st.text_input(
@@ -900,13 +1182,15 @@ def tools_tab(config: dict[str, Any]) -> None:
         unitree_g1_sim.get(
             "enabled_tools",
             [
-                "start",
-                "stop",
-                "status",
+                "confirm_deployment",
+                "perform_skill",
                 "perform_replay",
+                "list_skills",
                 "list_replays",
-                "switch_interface",
                 "start_control",
+                "switch_zmq",
+                "switch_keyboard",
+                "toggle_zmq_streaming",
                 "toggle_planner",
                 "keyboard",
                 "select_mode",
@@ -917,18 +1201,20 @@ def tools_tab(config: dict[str, Any]) -> None:
     )
     st.caption("Choose which GR00T manager sim tools are exposed to the agent.")
     sim_tool_options = [
-        ("start", "Start"),
-        ("stop", "Stop"),
-        ("status", "Status"),
-        ("perform_replay", "Replay"),
-        ("list_replays", "List replays"),
-        ("switch_interface", "Switch interface"),
-        ("start_control", "Start control"),
-        ("toggle_planner", "Planner"),
-        ("keyboard", "Keyboard"),
-        ("select_mode", "Mode"),
-        ("adjust", "Adjust"),
-        ("compliance", "Compliance"),
+        ("confirm_deployment", "confirm_deployment"),
+        ("perform_skill", "perform_skill"),
+        ("perform_replay", "perform_replay"),
+        ("list_skills", "list_skills"),
+        ("list_replays", "list_replays"),
+        ("start_control", "start_control"),
+        ("switch_zmq", "switch_zmq"),
+        ("switch_keyboard", "switch_keyboard"),
+        ("toggle_zmq_streaming", "toggle_zmq_streaming"),
+        ("toggle_planner", "toggle_planner"),
+        ("keyboard", "keyboard"),
+        ("select_mode", "select_mode"),
+        ("adjust", "adjust"),
+        ("compliance", "compliance"),
     ]
     selected_sim_tools: list[str] = []
     for row_start in range(0, len(sim_tool_options), 5):
@@ -945,6 +1231,12 @@ def tools_tab(config: dict[str, Any]) -> None:
                 if enabled:
                     selected_sim_tools.append(tool_name)
     unitree_g1_sim["enabled_tools"] = selected_sim_tools
+    unitree_g1_sim["skills"] = unitree_skill_editor(
+        "Add replay-backed skills for the sim agent. For example, name `wave left hand` with file `wave_left_hand.npy`.",
+        unitree_g1_sim.get("skills", deepcopy(DEFAULT_UNITREE_G1_SIM_SKILLS)),
+        key="unitree_g1_sim_skills",
+        allow_vla=False,
+    )
     env["UNITREE_G1_SIM_DEPLOY_DIR"] = unitree_g1_sim["deploy_dir"]
     env["GR00T_WBC_ROOT"] = unitree_g1_sim["gr00t_root"]
     env["UNITREE_G1_SIM_REPLAY_DIR"] = unitree_g1_sim["replay_dir"]
@@ -978,41 +1270,39 @@ def tools_tab(config: dict[str, Any]) -> None:
     if unitree_g1_real["tools_enabled"]:
         unitree_g1["tools_enabled"] = False
         unitree_g1_sim["tools_enabled"] = False
-    unitree_g1_real["deploy_dir"] = st.text_input(
-        "Real GR00T deploy directory",
-        value=unitree_g1_real.get("deploy_dir", "")
-        or env.get("UNITREE_G1_REAL_DEPLOY_DIR", ""),
-        help="Path to the real deploy directory that contains deploy.sh.",
-    )
-    unitree_g1_real["gr00t_root"] = st.text_input(
-        "Real GR00T-WholeBodyControl root",
-        value=unitree_g1_real.get("gr00t_root", "")
-        or env.get("GR00T_WBC_ROOT", ""),
-        help="Path used to run gear_sonic/scripts/sonic_encoder_input_player.py.",
-    )
-    unitree_g1_real["replay_dir"] = st.text_input(
-        "Real replay .npy directory",
-        value=unitree_g1_real.get("replay_dir", "replays/unitree_g1_sim")
-        or env.get("UNITREE_G1_REAL_REPLAY_DIR", "replays/unitree_g1_sim"),
-    )
-    real_start_cols = st.columns(4)
+    real_path_cols = st.columns(2)
+    with real_path_cols[0]:
+        unitree_g1_real["deploy_dir"] = st.text_input(
+            "Real GR00T deploy directory",
+            value=unitree_g1_real.get("deploy_dir", "")
+            or env.get("UNITREE_G1_REAL_DEPLOY_DIR", ""),
+            help="Path to the real deploy directory that contains deploy.sh.",
+        )
+        unitree_g1_real["vla_server_root"] = st.text_input(
+            "VLA server root",
+            value=unitree_g1_real.get("vla_server_root", "")
+            or DEFAULT_UNITREE_G1_VLA_SERVER_ROOT,
+            help="Path to Isaac-GR00T used to start gr00t/eval/run_gr00t_server.py.",
+        )
+    with real_path_cols[1]:
+        unitree_g1_real["gr00t_root"] = st.text_input(
+            "Real GR00T-WholeBodyControl root",
+            value=unitree_g1_real.get("gr00t_root", "")
+            or env.get("GR00T_WBC_ROOT", ""),
+            help="Path used to run gear_sonic replay and VLA inference scripts.",
+        )
+        unitree_g1_real["replay_dir"] = st.text_input(
+            "Real replay directory",
+            value=unitree_g1_real.get("replay_dir", "replays/unitree_g1_sim")
+            or env.get("UNITREE_G1_REAL_REPLAY_DIR", "replays/unitree_g1_sim"),
+        )
+    real_start_cols = st.columns(2)
     with real_start_cols[0]:
         unitree_g1_real["auto_start"] = st.checkbox(
             "Auto-start real manager",
             value=bool(unitree_g1_real.get("auto_start", True)),
         )
     with real_start_cols[1]:
-        unitree_g1_real["confirm_deployment"] = st.checkbox(
-            "Send Y after real start",
-            value=bool(unitree_g1_real.get("confirm_deployment", True)),
-            help="Confirm the `Proceed with deployment` prompt.",
-        )
-    with real_start_cols[2]:
-        unitree_g1_real["start_control"] = st.checkbox(
-            "Send ] after real start",
-            value=bool(unitree_g1_real.get("start_control", True)),
-        )
-    with real_start_cols[3]:
         unitree_g1_real["startup_settle_seconds"] = st.number_input(
             "Real startup settle seconds",
             min_value=0.0,
@@ -1024,8 +1314,8 @@ def tools_tab(config: dict[str, Any]) -> None:
     with real_terminal_cols[0]:
         unitree_g1_real["terminal_viewer"] = st.checkbox(
             "Open real terminal viewer",
-            value=bool(unitree_g1_real.get("terminal_viewer", False)),
-            help="Open a terminal window that tails real manager/replay logs.",
+            value=bool(unitree_g1_real.get("terminal_viewer", True)),
+            help="Open a terminal window when the real manager starts.",
         )
     with real_terminal_cols[1]:
         unitree_g1_real["log_dir"] = st.text_input(
@@ -1037,13 +1327,15 @@ def tools_tab(config: dict[str, Any]) -> None:
         unitree_g1_real.get(
             "enabled_tools",
             [
-                "start",
-                "stop",
-                "status",
+                "confirm_deployment",
+                "perform_skill",
                 "perform_replay",
+                "list_skills",
                 "list_replays",
-                "switch_interface",
                 "start_control",
+                "switch_zmq",
+                "switch_keyboard",
+                "toggle_zmq_streaming",
                 "toggle_planner",
                 "keyboard",
                 "select_mode",
@@ -1068,6 +1360,39 @@ def tools_tab(config: dict[str, Any]) -> None:
                 if enabled:
                     selected_real_tools.append(tool_name)
     unitree_g1_real["enabled_tools"] = selected_real_tools
+    real_skills = unitree_g1_real.get(
+        "skills",
+        deepcopy(DEFAULT_UNITREE_G1_REAL_SKILLS),
+    )
+    wave_left_hand_file = st.text_input(
+        "Wave left hand replay file",
+        value=get_replay_skill_file(
+            real_skills,
+            "wave left hand",
+            DEFAULT_UNITREE_G1_REAL_REPLAY_FILE,
+        ),
+        help=(
+            "Absolute .parquet files run sonic_encoder_input_player_with_hand.py "
+            "with --parquet-file. If an absolute path is configured, the backend "
+            "first checks the real replay directory for a file with the same name, "
+            "then falls back to the absolute path."
+        ),
+    )
+    real_skills = set_replay_skill_file(
+        real_skills,
+        "wave left hand",
+        wave_left_hand_file,
+    )
+    unitree_g1_real["skills"] = unitree_skill_editor(
+        "Add real robot skills. Replay skills can use `.npy` or `.parquet` files; VLA skills use the prompt field as the skill input.",
+        real_skills,
+        key="unitree_g1_real_skills",
+        allow_vla=True,
+    )
+    unitree_g1_real["skills"] = apply_vla_server_root(
+        unitree_g1_real["skills"],
+        unitree_g1_real.get("vla_server_root", ""),
+    )
     env["UNITREE_G1_REAL_DEPLOY_DIR"] = unitree_g1_real["deploy_dir"]
     env["GR00T_WBC_ROOT"] = unitree_g1_real["gr00t_root"]
     env["UNITREE_G1_REAL_REPLAY_DIR"] = unitree_g1_real["replay_dir"]
@@ -1172,6 +1497,7 @@ def preview_tab(config: dict[str, Any]) -> None:
     st.subheader("Generated command")
     command = [
         "uv run python app/s2s_no_ros.py",
+        f"--agent-mode {config['s2s'].get('agent_mode', 'standard')}",
         "--python-tools" if config["tools"]["python_tools"] else "--no-python-tools",
         f"--language {config['s2s']['language']}",
         f"--asr {config['s2s']['asr']}",
@@ -1202,10 +1528,6 @@ def preview_tab(config: dict[str, Any]) -> None:
             command.append(f"--unitree-g1-sim-replay-dir {replay_dir}")
         if not config["unitree_g1_sim"].get("auto_start", True):
             command.append("--no-unitree-g1-sim-auto-start")
-        if not config["unitree_g1_sim"].get("confirm_deployment", True):
-            command.append("--no-unitree-g1-sim-confirm-deployment")
-        if not config["unitree_g1_sim"].get("start_control", True):
-            command.append("--no-unitree-g1-sim-start-control")
         settle_seconds = config["unitree_g1_sim"].get("startup_settle_seconds", 2.0)
         command.append(f"--unitree-g1-sim-startup-settle-seconds {settle_seconds}")
         if config["unitree_g1_sim"].get("terminal_viewer", False):
@@ -1231,10 +1553,6 @@ def preview_tab(config: dict[str, Any]) -> None:
             command.append(f"--unitree-g1-real-replay-dir {replay_dir}")
         if not config["unitree_g1_real"].get("auto_start", True):
             command.append("--no-unitree-g1-real-auto-start")
-        if not config["unitree_g1_real"].get("confirm_deployment", True):
-            command.append("--no-unitree-g1-real-confirm-deployment")
-        if not config["unitree_g1_real"].get("start_control", True):
-            command.append("--no-unitree-g1-real-start-control")
         settle_seconds = config["unitree_g1_real"].get("startup_settle_seconds", 2.0)
         command.append(f"--unitree-g1-real-startup-settle-seconds {settle_seconds}")
         if config["unitree_g1_real"].get("terminal_viewer", False):

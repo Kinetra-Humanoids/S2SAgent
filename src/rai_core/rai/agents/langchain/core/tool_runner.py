@@ -129,8 +129,16 @@ class ToolRunner(RunnableCallable):
             except Exception as e:
                 self.logger.info(f'Error in "{call["name"]}", error: {e}')
                 print(f"[Tool Error] {call['name']}: {e}", flush=True)
+                error_text = str(e)
+                if e.__class__.__name__ == "ToolStateError":
+                    error_message = (
+                        "Tool precondition failed. The tool was not executed.\n"
+                        f"{error_text}"
+                    )
+                else:
+                    error_message = f"Failed to run tool. Error: {error_text}"
                 output = ToolMessage(
-                    content=f"Failed to run tool. Error: {e}",
+                    content=error_message,
                     name=call["name"],
                     tool_call_id=call["id"],
                     status="error",

@@ -38,6 +38,7 @@ use_langsmith = false
 host = "https://api.smith.langchain.com"
 
 [s2s]
+agent_mode = "policy_delegate"
 mic_device = "MacBook Pro Microphone"
 speaker_device = "default"
 speaker_backend = "sounddevice"
@@ -81,22 +82,105 @@ deploy_dir = ""
 gr00t_root = ""
 replay_dir = "replays/unitree_g1_sim"
 auto_start = true
+confirm_deployment = true
 start_control = true
 startup_settle_seconds = 2.0
+terminal_viewer = true
+log_dir = "logs/unitree_g1_sim"
 enabled_tools = [
-    "start",
-    "stop",
-    "status",
+    "confirm_deployment",
+    "perform_skill",
     "perform_replay",
+    "list_skills",
     "list_replays",
-    "switch_interface",
     "start_control",
+    "switch_zmq",
+    "switch_keyboard",
+    "toggle_zmq_streaming",
     "toggle_planner",
     "keyboard",
     "select_mode",
     "adjust",
     "compliance",
 ]
+
+[[unitree_g1_sim.skills]]
+name = "wave left hand"
+source = "replay"
+file = "wave_left_hand.npy"
+aliases = [
+    "wave",
+    "left hand wave",
+    "wave_left_hand",
+]
+description = "Wave the left hand using a replay trajectory."
+
+[[unitree_g1_sim.skills]]
+name = "run"
+source = "replay"
+file = "run.npy"
+aliases = [
+    "running",
+]
+description = "Run using a replay trajectory."
+
+[[unitree_g1_sim.skills]]
+name = "squat stand"
+source = "replay"
+file = "squat_stand.npy"
+aliases = [
+    "squat_to_stand",
+    "蹲起",
+]
+description = "Squat down and stand up using a replay trajectory."
+
+[unitree_g1_real]
+tools_enabled = false
+deploy_dir = ""
+gr00t_root = ""
+vla_server_root = "/home/zj/Isaac-GR00T"
+replay_dir = "replays/unitree_g1_sim"
+auto_start = true
+confirm_deployment = true
+start_control = true
+startup_settle_seconds = 2.0
+terminal_viewer = true
+log_dir = "logs/unitree_g1_real"
+enabled_tools = [
+    "confirm_deployment",
+    "perform_skill",
+    "perform_replay",
+    "list_skills",
+    "list_replays",
+    "start_control",
+    "switch_zmq",
+    "switch_keyboard",
+    "toggle_zmq_streaming",
+    "toggle_planner",
+    "keyboard",
+    "select_mode",
+    "adjust",
+    "compliance",
+]
+
+[[unitree_g1_real.skills]]
+name = "wave left hand"
+source = "replay"
+file = "/home/zj/Agent/data/2026-05-23-13-59-19-filtered/data/chunk-000/episode_000000.parquet"
+aliases = [
+    "wave",
+    "left hand wave",
+    "wave_left_hand",
+]
+description = "Wave the left hand using a replay trajectory."
+
+[[unitree_g1_real.skills]]
+name = "wave left hand with vla"
+source = "vla"
+prompt = "Walk forward, grab the cola and throw into the trash bin"
+model_path = "/home/zj/Isaac-GR00T/test_ckpt/gr00t-freeze-vlm-half-expert-param-cola-644-binary-hand-bs96-0705/checkpoint-60000"
+aliases = []
+description = "Run the configured VLA policy through GR00T server and WBC inference."
 
 [sensor_tool]
 enabled = false

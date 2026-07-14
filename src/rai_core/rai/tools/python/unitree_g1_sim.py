@@ -26,18 +26,21 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
 
 DEFAULT_UNITREE_G1_SIM_TOOLS = [
-    "start",
-    "stop",
-    "status",
+    "confirm_deployment",
+    "perform_skill",
     "perform_replay",
+    "list_skills",
     "list_replays",
-    "switch_interface",
     "start_control",
+    "switch_zmq",
+    "switch_keyboard",
+    "toggle_zmq_streaming",
     "toggle_planner",
     "keyboard",
     "select_mode",
@@ -55,6 +58,129 @@ DEFAULT_REPLAY_ALIASES = {
     "squat_to_stand": "squat_stand.npy",
     "stand_from_squat": "squat_stand.npy",
     "蹲起": "squat_stand.npy",
+}
+
+DEFAULT_UNITREE_G1_SIM_SKILLS = [
+    {
+        "name": "wave left hand",
+        "source": "replay",
+        "file": "wave_left_hand.npy",
+        "aliases": ["wave", "left hand wave", "wave_left_hand"],
+        "description": "Wave the left hand.",
+    },
+    {
+        "name": "run",
+        "source": "replay",
+        "file": "run.npy",
+        "aliases": ["running"],
+        "description": "Run replay motion.",
+    },
+    {
+        "name": "squat stand",
+        "source": "replay",
+        "file": "squat_stand.npy",
+        "aliases": ["squat_to_stand", "蹲起"],
+        "description": "Squat and stand replay motion.",
+    },
+]
+
+DEPLOYMENT_STATES = {
+    "not_confirmed",
+    "waiting_init_done",
+    "ready",
+    "failed",
+}
+CONTROL_MODES = {
+    "pre_control",
+    "keyboard_normal",
+    "keyboard_planner",
+    "zmq",
+    "zmq_streaming",
+    "gamepad",
+    "ros2",
+}
+
+
+class ToolStateError(RuntimeError):
+    """Raised before a robot tool runs when the runtime state is invalid."""
+
+
+TOOL_STATE_RULES = {
+    "confirm_deployment": {
+        "deployment": {"not_confirmed", "failed"},
+        "control_mode": CONTROL_MODES,
+        "description": "Use after the manager terminal asks to proceed.",
+    },
+    "start_control": {
+        "deployment": {"ready"},
+        "control_mode": {"pre_control", "keyboard_normal"},
+        "description": "Use after deployment is ready, before motion/control tools.",
+    },
+    "perform_skill": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use from keyboard mode. It switches to ZMQ, enables streaming, then plays the replay file.",
+    },
+    "perform_replay": {
+        "deployment": {"ready"},
+        "control_mode": {"zmq"},
+        "description": "Use from ZMQ mode. It presses ENTER to enable ZMQ streaming, then plays the replay file.",
+    },
+    "list_skills": {
+        "deployment": DEPLOYMENT_STATES,
+        "control_mode": CONTROL_MODES,
+        "description": "Can be used anytime.",
+    },
+    "list_replays": {
+        "deployment": DEPLOYMENT_STATES,
+        "control_mode": CONTROL_MODES,
+        "description": "Can be used anytime.",
+    },
+    "switch_interface": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner", "zmq", "zmq_streaming", "gamepad", "ros2"},
+        "description": "Use only after deployment is ready. Target keyboard/zmq transitions still follow their specific state rules.",
+    },
+    "switch_zmq": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use only from keyboard_normal or keyboard_planner.",
+    },
+    "switch_keyboard": {
+        "deployment": {"ready"},
+        "control_mode": {"zmq", "zmq_streaming"},
+        "description": "Use only from zmq or zmq_streaming.",
+    },
+    "toggle_zmq_streaming": {
+        "deployment": {"ready"},
+        "control_mode": {"zmq", "zmq_streaming"},
+        "description": "Use ENTER in ZMQ mode to toggle streaming enabled/disabled.",
+    },
+    "toggle_planner": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use ENTER in keyboard mode to toggle normal/planner.",
+    },
+    "keyboard": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use after deployment is ready and keyboard control is active.",
+    },
+    "select_mode": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use after deployment is ready and keyboard control is active.",
+    },
+    "adjust": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use after deployment is ready and keyboard control is active.",
+    },
+    "compliance": {
+        "deployment": {"ready"},
+        "control_mode": {"keyboard_normal", "keyboard_planner"},
+        "description": "Use after deployment is ready and keyboard control is active.",
+    },
 }
 
 INTERFACE_KEYS = {
@@ -116,8 +242,129 @@ def _normalize_name(name: str) -> str:
     return name.strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def _normalize_skill_name(name: str) -> str:
+    return name.strip().lower().replace("_", " ").replace("-", " ")
+
+
 def _default_log_dir() -> Path:
     return Path(os.getenv("UNITREE_G1_SIM_LOG_DIR", "logs/unitree_g1_sim"))
+
+
+class UnitreeG1RuntimeState:
+    """Small LLM-facing robot state, intentionally separate from process status."""
+
+    def __init__(self, target: str):
+        self.target = target
+        self._lock = threading.RLock()
+        self.deployment = "not_confirmed"
+        self.control_mode = "pre_control"
+        self.last_skill = ""
+        self.last_error = ""
+
+    def reset_for_start(self) -> None:
+        self.update(
+            deployment="not_confirmed",
+            control_mode="pre_control",
+            last_skill="",
+            last_error="",
+        )
+
+    def update(
+        self,
+        *,
+        deployment: str | None = None,
+        control_mode: str | None = None,
+        last_skill: str | None = None,
+        last_error: str | None = None,
+    ) -> None:
+        with self._lock:
+            if deployment is not None:
+                self.deployment = deployment
+            if control_mode is not None:
+                self.control_mode = control_mode
+            if last_skill is not None:
+                self.last_skill = last_skill
+            if last_error is not None:
+                self.last_error = last_error
+
+    def snapshot(self) -> dict[str, str]:
+        with self._lock:
+            return {
+                "target": self.target,
+                "deployment": self.deployment,
+                "control_mode": self.control_mode,
+                "last_skill": self.last_skill or "none",
+                "last_error": self.last_error or "none",
+            }
+
+    def require(
+        self,
+        tool_name: str,
+        *,
+        deployment: set[str],
+        control_mode: set[str],
+    ) -> None:
+        state = self.snapshot()
+        if (
+            state["deployment"] not in deployment
+            or state["control_mode"] not in control_mode
+        ):
+            allowed_deployment = ", ".join(sorted(deployment))
+            allowed_modes = ", ".join(sorted(control_mode))
+            raise ToolStateError(
+                "\n".join(
+                    [
+                        "Tool was not executed because the Unitree G1 runtime state "
+                        "does not satisfy this tool's preconditions.",
+                        f"tool: {tool_name}",
+                        f"current deployment: {state['deployment']}",
+                        f"current control_mode: {state['control_mode']}",
+                        f"allowed deployment: {allowed_deployment}",
+                        f"allowed control_mode: {allowed_modes}",
+                        "Use the current state and allowed states to choose the next "
+                        "valid tool. Do not claim the rejected tool was executed.",
+                    ]
+                )
+            )
+
+    def summary(self, *, skills: list[str] | None = None) -> str:
+        state = self.snapshot()
+        lines = [
+            "Current Unitree G1 runtime state:",
+            f"- target: {state['target']}",
+            f"- deployment: {state['deployment']}",
+            f"- control_mode: {state['control_mode']}",
+            f"- last_skill: {state['last_skill']}",
+            f"- last_error: {state['last_error']}",
+        ]
+        if skills:
+            lines.append("- available_skills: " + ", ".join(skills))
+        return "\n".join(lines)
+
+
+def _configured_skill_names(
+    *,
+    replay_dir: str,
+    skills: list[dict[str, Any]] | None,
+) -> list[str]:
+    catalog = _skill_catalog(replay_dir=replay_dir, skills=skills)
+    return sorted({skill["name"] for skill in catalog.values()})
+
+
+def _tool_state_rules_text(enabled_tools: list[str] | None = None) -> str:
+    tool_names = enabled_tools or DEFAULT_UNITREE_G1_SIM_TOOLS
+    lines = ["Unitree G1 tool state rules:"]
+    for tool_name in tool_names:
+        rule = TOOL_STATE_RULES.get(tool_name)
+        if rule is None:
+            continue
+        deployments = ", ".join(sorted(rule["deployment"]))
+        modes = ", ".join(sorted(rule["control_mode"]))
+        lines.append(
+            f"- {tool_name}: deployment=[{deployments}], "
+            f"control_mode=[{modes}]. {rule['description']}"
+        )
+    return "\n".join(lines)
 
 
 def _launch_terminal_tail(log_path: Path, title: str) -> str:
@@ -176,6 +423,7 @@ class UnitreeG1SimManager:
         self._started_at: float | None = None
         self._log_path: Path | None = None
         self._terminal_started = False
+        self.state = UnitreeG1RuntimeState("sim")
 
     def configure(self, *, terminal_viewer: bool, log_dir: str | None = None) -> None:
         self.terminal_viewer = terminal_viewer
@@ -246,6 +494,7 @@ class UnitreeG1SimManager:
                 daemon=True,
             )
             self._reader_thread.start()
+            self.state.reset_for_start()
             return (
                 "Started GR00T WBC manager sim: "
                 f"pid={self._process.pid}, command={command[-1]}. "
@@ -257,8 +506,8 @@ class UnitreeG1SimManager:
         self,
         deploy_dir: str = "",
         extra_args: str = "",
-        confirm_deployment: bool = True,
-        start_control: bool = True,
+        confirm_deployment: bool = False,
+        start_control: bool = False,
         settle_seconds: float = 2.0,
         init_done_timeout: float = 60.0,
     ) -> str:
@@ -267,14 +516,21 @@ class UnitreeG1SimManager:
             time.sleep(min(float(settle_seconds), 10.0))
         if confirm_deployment:
             self._require_running()
+            self.state.update(deployment="waiting_init_done", last_error="")
             self._send_key("y")
             self._send_key("\n")
             messages.append("Sent deployment confirmation: Y")
-            messages.append(
-                self.wait_for_output("Init Done", timeout=init_done_timeout)
-            )
+            try:
+                messages.append(
+                    self.wait_for_output("Init Done", timeout=init_done_timeout)
+                )
+                self.state.update(deployment="ready", last_error="")
+            except Exception as exc:
+                self.state.update(deployment="failed", last_error=str(exc))
+                raise
         if start_control:
             messages.append(self.send_key("]", "start_control"))
+            self.state.update(control_mode="keyboard_normal")
         return "\n".join(messages)
 
     def stop(self, graceful: bool = True, timeout: float = 5.0) -> str:
@@ -282,13 +538,6 @@ class UnitreeG1SimManager:
             process = self._process
             if process is None:
                 return "GR00T WBC manager sim is not running."
-
-            if process.poll() is None and graceful:
-                self._send_key("o")
-                try:
-                    process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass
 
             if process.poll() is None:
                 try:
@@ -333,6 +582,28 @@ class UnitreeG1SimManager:
                     time.sleep(safe_interval)
             return f"Sent {label}: key={key!r}, repeats={safe_repeats}"
 
+    def confirm_deployment(self, timeout: float = 60.0) -> str:
+        with self._lock:
+            self._require_running()
+            self.state.update(deployment="waiting_init_done", last_error="")
+            self._send_key("y")
+            self._send_key("\n")
+        try:
+            detected = self.wait_for_output("Init Done", timeout=timeout)
+            self.state.update(deployment="ready", last_error="")
+            return "\n".join(
+                [
+                    "Sent deployment confirmation: Y",
+                    detected,
+                    "Deployment完成. Current control_mode remains pre_control.",
+                    "Next step before motion tools: call unitree_g1_sim_start_control to send ']'.",
+                    self.state.summary(),
+                ]
+            )
+        except Exception as exc:
+            self.state.update(deployment="failed", last_error=str(exc))
+            raise
+
     def wait_for_output(self, text: str, timeout: float = 60.0) -> str:
         deadline = time.time() + max(1.0, float(timeout))
         while time.time() < deadline:
@@ -352,7 +623,25 @@ class UnitreeG1SimManager:
             self._send_key("#")
             time.sleep(0.2)
             self._send_key("\n")
+            self.state.update(control_mode="zmq_streaming", last_error="")
             return "Switched manager to ZMQ interface and sent ENTER to toggle streaming."
+
+    def switch_to_zmq(self) -> str:
+        message = self.send_key("#", "switch_interface:zmq")
+        self.state.update(control_mode="zmq", last_error="")
+        return f"{message}\n{self.state.summary()}"
+
+    def toggle_zmq_streaming(self) -> str:
+        message = self.send_key("\n", "toggle_zmq_streaming")
+        current = self.state.snapshot()["control_mode"]
+        next_mode = "zmq" if current == "zmq_streaming" else "zmq_streaming"
+        self.state.update(control_mode=next_mode, last_error="")
+        status = "DISABLED" if next_mode == "zmq" else "ENABLED"
+        return (
+            f"{message}\n"
+            f"ZMQ STREAMING MODE: {status}\n"
+            f"{self.state.summary()}"
+        )
 
     def prepare_replay_streaming(self) -> str:
         with self._lock:
@@ -368,7 +657,9 @@ class UnitreeG1SimManager:
             )
 
     def switch_to_keyboard(self) -> str:
-        return self.send_key("!", "switch_interface:keyboard")
+        message = self.send_key("!", "switch_interface:keyboard")
+        self.state.update(control_mode="keyboard_normal", last_error="")
+        return f"{message}\n{self.state.summary()}"
 
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -432,7 +723,7 @@ class UnitreeG1SimManager:
 
 
 class UnitreeG1SimReplayPlayer:
-    """Runs sonic_encoder_input_player.py in a separate shell process."""
+    """Runs a SONIC replay player in a separate shell process."""
 
     def __init__(
         self,
@@ -459,7 +750,7 @@ class UnitreeG1SimReplayPlayer:
 
     def play(
         self,
-        latent_input_file: Path,
+        replay_file: Path,
         gr00t_root: str = "",
         wait: bool = True,
         timeout: float = 60.0,
@@ -473,18 +764,26 @@ class UnitreeG1SimReplayPlayer:
                     "[unitree_g1_sim].gr00t_root, GR00T_WBC_ROOT, or pass gr00t_root."
                 )
             cwd = cwd.expanduser().resolve()
-            if not (cwd / "gear_sonic" / "scripts" / "sonic_encoder_input_player.py").exists():
+            is_parquet = replay_file.suffix == ".parquet"
+            script_name = (
+                "sonic_encoder_input_player_with_hand.py"
+                if is_parquet
+                else "sonic_encoder_input_player.py"
+            )
+            script_path = cwd / "gear_sonic" / "scripts" / script_name
+            if not script_path.exists():
                 raise RuntimeError(
-                    "sonic_encoder_input_player.py was not found under "
+                    f"{script_name} was not found under "
                     f"{cwd}/gear_sonic/scripts"
                 )
-            if not latent_input_file.exists():
-                raise RuntimeError(f"Replay file does not exist: {latent_input_file}")
+            if not replay_file.exists():
+                raise RuntimeError(f"Replay file does not exist: {replay_file}")
 
+            input_arg = "--parquet-file" if is_parquet else "--latent-input-file"
             command = (
                 "source .venv_teleop/bin/activate && "
-                "python gear_sonic/scripts/sonic_encoder_input_player.py "
-                f"--latent-input-file {shlex.quote(str(latent_input_file))}"
+                f"python gear_sonic/scripts/{script_name} "
+                f"{input_arg} {shlex.quote(str(replay_file))}"
             )
             master_fd, slave_fd = pty.openpty()
             self._logs.clear()
@@ -521,7 +820,7 @@ class UnitreeG1SimReplayPlayer:
             self._reader_thread.start()
             started = (
                 f"Started replay player: pid={self._process.pid}, "
-                f"latent_input_file={latent_input_file}"
+                f"replay_file={replay_file}"
                 f"{terminal_message}"
             )
         if not wait:
@@ -691,19 +990,84 @@ def _resolve_replay_file(replay_dir: str, action: str) -> Path:
     normalized = _normalize_name(action)
     filename = DEFAULT_REPLAY_ALIASES.get(normalized, action)
     path = Path(filename)
-    if not path.is_absolute():
+    if path.is_absolute():
+        default_path = replay_root / path.name
+        path = default_path if default_path.exists() else path.expanduser()
+    else:
         path = replay_root / path
-    if path.suffix != ".npy":
+    if path.suffix not in {".npy", ".parquet"}:
         path = path.with_suffix(".npy")
     return path
+
+
+def _resolve_replay_path(replay_dir: str, filename: str) -> Path:
+    replay_root = Path(replay_dir or "replays/unitree_g1_sim").expanduser().resolve()
+    path = Path(filename)
+    if path.is_absolute():
+        default_path = replay_root / path.name
+        path = default_path if default_path.exists() else path.expanduser()
+    else:
+        path = replay_root / path
+    if path.suffix not in {".npy", ".parquet"}:
+        path = path.with_suffix(".npy")
+    return path
+
+
+def _skill_catalog(
+    *,
+    replay_dir: str,
+    skills: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    catalog: dict[str, dict[str, Any]] = {}
+    for raw_skill in skills or DEFAULT_UNITREE_G1_SIM_SKILLS:
+        name = str(raw_skill.get("name", "")).strip()
+        if not name:
+            continue
+        source = str(raw_skill.get("source", "replay")).strip().lower()
+        skill = {
+            "name": name,
+            "source": source,
+            "description": str(raw_skill.get("description", "")).strip(),
+            "file": str(raw_skill.get("file", "")).strip(),
+            "prompt": str(raw_skill.get("prompt", "")).strip(),
+            "model_path": str(raw_skill.get("model_path", "")).strip(),
+            "server_root": str(raw_skill.get("server_root", "")).strip(),
+            "wbc_root": str(raw_skill.get("wbc_root", "")).strip(),
+            "server_port": str(raw_skill.get("server_port", "")).strip(),
+            "embodiment_tag": str(raw_skill.get("embodiment_tag", "")).strip(),
+            "device": str(raw_skill.get("device", "")).strip(),
+            "camera_host": str(raw_skill.get("camera_host", "")).strip(),
+            "camera_port": str(raw_skill.get("camera_port", "")).strip(),
+            "action_publish_rate": str(raw_skill.get("action_publish_rate", "")).strip(),
+            "action_horizon": str(raw_skill.get("action_horizon", "")).strip(),
+        }
+        aliases = raw_skill.get("aliases", [])
+        if isinstance(aliases, str):
+            aliases = [item.strip() for item in aliases.split(",")]
+        for alias in [name, *list(aliases)]:
+            if str(alias).strip():
+                catalog[_normalize_skill_name(str(alias))] = skill
+    for alias, filename in DEFAULT_REPLAY_ALIASES.items():
+        key = _normalize_skill_name(alias)
+        catalog.setdefault(
+            key,
+            {
+                "name": alias,
+                "source": "replay",
+                "description": "",
+                "file": filename,
+                "prompt": "",
+            },
+        )
+    return catalog
 
 
 def start_unitree_g1_sim_manager(
     *,
     deploy_dir: str | None = None,
     extra_args: str = "",
-    confirm_deployment: bool = True,
-    start_control: bool = True,
+    confirm_deployment: bool = False,
+    start_control: bool = False,
     settle_seconds: float = 2.0,
     init_done_timeout: float = 60.0,
     terminal_viewer: bool | None = None,
@@ -729,12 +1093,37 @@ def stop_unitree_g1_sim_manager(*, deploy_dir: str | None = None) -> str:
     return manager.stop(graceful=True)
 
 
+def get_unitree_g1_sim_runtime_prompt(
+    *,
+    deploy_dir: str | None = None,
+    replay_dir: str | None = None,
+    skills: list[dict[str, Any]] | None = None,
+    enabled_tools: list[str] | None = None,
+) -> str:
+    configured_replay_dir = replay_dir or os.getenv(
+        "UNITREE_G1_SIM_REPLAY_DIR",
+        "replays/unitree_g1_sim",
+    )
+    manager = _get_manager(deploy_dir or "")
+    skill_names = _configured_skill_names(
+        replay_dir=configured_replay_dir,
+        skills=skills or DEFAULT_UNITREE_G1_SIM_SKILLS,
+    )
+    return "\n\n".join(
+        [
+            manager.state.summary(skills=skill_names),
+            _tool_state_rules_text(enabled_tools),
+        ]
+    )
+
+
 def get_unitree_g1_sim_tools(
     *,
     deploy_dir: str | None = None,
     gr00t_root: str | None = None,
     replay_dir: str | None = None,
     enabled_tools: list[str] | None = None,
+    skills: list[dict[str, Any]] | None = None,
     terminal_viewer: bool | None = None,
     log_dir: str | None = None,
 ) -> list[BaseTool]:
@@ -745,7 +1134,12 @@ def get_unitree_g1_sim_tools(
         "replays/unitree_g1_sim",
     )
     enabled_tool_names = set(enabled_tools or DEFAULT_UNITREE_G1_SIM_TOOLS)
+    configured_skills = skills or DEFAULT_UNITREE_G1_SIM_SKILLS
     active_deploy_dir = {"value": configured_deploy_dir}
+    skill_names = _configured_skill_names(
+        replay_dir=configured_replay_dir,
+        skills=configured_skills,
+    )
 
     def manager() -> UnitreeG1SimManager:
         return _get_manager(
@@ -759,6 +1153,17 @@ def get_unitree_g1_sim_tools(
             configured_gr00t_root,
             terminal_viewer=terminal_viewer,
             log_dir=log_dir,
+        )
+
+    def runtime_state() -> str:
+        return manager().state.summary(skills=skill_names)
+
+    def require_tool_state(tool_name: str) -> None:
+        rule = TOOL_STATE_RULES[tool_name]
+        manager().state.require(
+            tool_name,
+            deployment=rule["deployment"],
+            control_mode=rule["control_mode"],
         )
 
     @tool
@@ -785,7 +1190,11 @@ def get_unitree_g1_sim_tools(
 
     @tool
     def unitree_g1_sim_stop_manager(graceful: bool = True) -> str:
-        """Stop GR00T manager sim. Graceful mode sends `O` emergency stop first."""
+        """Stop the backend-owned manager process without sending `O`.
+
+        For robot safety, `O` emergency stop is reserved for the human operator
+        typing in the visible control terminal.
+        """
         return manager().stop(graceful=graceful)
 
     @tool
@@ -794,8 +1203,20 @@ def get_unitree_g1_sim_tools(
         return manager().status(tail_lines=tail_lines)
 
     @tool
+    def unitree_g1_sim_confirm_deployment(timeout: float = 60.0) -> str:
+        """Confirm `Proceed with deployment` by sending `Y` and ENTER.
+
+        Waits until the manager prints `Init Done`. This sets deployment to
+        ready but leaves control_mode as pre_control; call
+        unitree_g1_sim_start_control next to send `]`.
+        """
+        require_tool_state("confirm_deployment")
+        return manager().confirm_deployment(timeout=timeout)
+
+    @tool
     def unitree_g1_sim_list_replays() -> str:
         """List configured high-level replay actions and whether their .npy files exist."""
+        require_tool_state("list_replays")
         replay_root = Path(configured_replay_dir).expanduser().resolve()
         lines = [f"Replay directory: {replay_root}"]
         for action_name, filename in sorted(DEFAULT_REPLAY_ALIASES.items()):
@@ -804,30 +1225,47 @@ def get_unitree_g1_sim_tools(
             path = replay_root / filename
             status = "ready" if path.exists() else "missing"
             lines.append(f"- {action_name}: {path} ({status})")
-        return "\n".join(lines)
+        return "\n".join([*lines, runtime_state()])
 
     @tool
-    def unitree_g1_sim_perform_replay(
-        action: str,
-        wait: bool = True,
-        timeout: float = 60.0,
-        return_to_keyboard: bool = True,
-    ) -> str:
-        """Perform a high-level replay action from a latent .npy file.
+    def unitree_g1_sim_list_skills() -> str:
+        """List configured Unitree G1 sim skills exposed to the agent."""
+        require_tool_state("list_skills")
+        catalog = _skill_catalog(
+            replay_dir=configured_replay_dir,
+            skills=configured_skills,
+        )
+        seen: set[str] = set()
+        lines = ["Configured Unitree G1 sim skills:"]
+        for skill in catalog.values():
+            name = skill["name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            if skill["source"] == "replay":
+                path = _resolve_replay_path(configured_replay_dir, skill["file"])
+                status = "ready" if path.exists() else "missing"
+                lines.append(f"- {name}: replay {path} ({status})")
+            else:
+                lines.append(f"- {name}: {skill['source']}")
+        return "\n".join([*lines, runtime_state()])
 
-        The tool sends `]`, waits 1 second, switches manager to ZMQ (`#`), sends
-        ENTER to enable streaming, then runs
-        `sonic_encoder_input_player.py --latent-input-file <file>` from the
-        configured GR00T-WholeBodyControl root. Supported action aliases include
-        wave_left_hand, run, and squat_stand/蹲起. A direct .npy path is also
-        accepted. By default, the replay player shell is closed after it prints
-        `[EncoderInputPlayer] Stopped`, then the manager switches back to
-        keyboard mode.
-        """
-        replay_file = _resolve_replay_file(configured_replay_dir, action)
+    def perform_replay_file(
+        replay_file: Path,
+        *,
+        preparation: str,
+        wait: bool,
+        timeout: float,
+        return_to_keyboard: bool,
+    ) -> str:
         sim_manager = manager()
         replay_player = player()
-        manager_message = sim_manager.prepare_replay_streaming()
+        if preparation == "keyboard_to_zmq_streaming":
+            manager_message = sim_manager.prepare_zmq_streaming()
+        elif preparation == "toggle_zmq_streaming":
+            manager_message = sim_manager.toggle_zmq_streaming()
+        else:
+            raise ValueError(f"Unsupported replay preparation: {preparation!r}")
         player_message = replay_player.play(
             replay_file,
             gr00t_root=configured_gr00t_root,
@@ -854,7 +1292,80 @@ def get_unitree_g1_sim_tools(
                 daemon=True,
             ).start()
             messages.append("Keyboard mode will be restored after the replay exits.")
-        return "\n".join(messages)
+        return "\n".join([*messages, runtime_state()])
+
+    @tool
+    def unitree_g1_sim_perform_skill(
+        skill: str,
+        wait: bool = True,
+        timeout: float = 60.0,
+        return_to_keyboard: bool = True,
+    ) -> str:
+        """Perform a configured sim skill by name.
+
+        Replay skills switch to ZMQ (`#`), send ENTER to open ZMQ streaming, then
+        run `sonic_encoder_input_player.py --latent-input-file <file>` in the
+        replay player shell.
+        """
+        require_tool_state("perform_skill")
+        catalog = _skill_catalog(
+            replay_dir=configured_replay_dir,
+            skills=configured_skills,
+        )
+        selected = catalog.get(_normalize_skill_name(skill))
+        if selected is None:
+            supported = ", ".join(sorted({item["name"] for item in catalog.values()}))
+            raise ValueError(f"Unsupported sim skill {skill!r}. Supported: {supported}")
+        if selected["source"] != "replay":
+            raise ValueError(f"Unsupported sim skill source: {selected['source']!r}")
+        replay_file = _resolve_replay_path(configured_replay_dir, selected["file"])
+        try:
+            manager().state.update(last_skill=selected["name"], last_error="")
+            result = perform_replay_file(
+                replay_file,
+                preparation="keyboard_to_zmq_streaming",
+                wait=wait,
+                timeout=timeout,
+                return_to_keyboard=return_to_keyboard,
+            )
+            return result
+        except Exception as exc:
+            manager().state.update(last_error=str(exc))
+            raise
+
+    @tool
+    def unitree_g1_sim_perform_replay(
+        action: str,
+        wait: bool = True,
+        timeout: float = 60.0,
+        return_to_keyboard: bool = True,
+    ) -> str:
+        """Perform a high-level replay action from a latent .npy file.
+
+        The tool must be called from ZMQ mode. It sends ENTER to enable ZMQ
+        streaming, then runs
+        `sonic_encoder_input_player.py --latent-input-file <file>` from the
+        configured GR00T-WholeBodyControl root. Supported action aliases include
+        wave_left_hand, run, and squat_stand/蹲起. A direct .npy path is also
+        accepted. By default, the replay player shell is closed after it prints
+        `[EncoderInputPlayer] Stopped`, then the manager switches back to
+        keyboard mode.
+        """
+        require_tool_state("perform_replay")
+        replay_file = _resolve_replay_file(configured_replay_dir, action)
+        try:
+            manager().state.update(last_skill=Path(replay_file).stem, last_error="")
+            result = perform_replay_file(
+                replay_file,
+                preparation="toggle_zmq_streaming",
+                wait=wait,
+                timeout=timeout,
+                return_to_keyboard=return_to_keyboard,
+            )
+            return result
+        except Exception as exc:
+            manager().state.update(last_error=str(exc))
+            raise
 
     @tool
     def unitree_g1_sim_switch_interface(interface: str) -> str:
@@ -868,17 +1379,68 @@ def get_unitree_g1_sim_tools(
         if key is None:
             supported = ", ".join(INTERFACE_KEYS)
             raise ValueError(f"Unsupported interface {interface!r}. Supported: {supported}")
-        return manager().send_key(key, f"switch_interface:{normalized}")
+        require_tool_state("switch_interface")
+        current_mode = manager().state.snapshot()["control_mode"]
+        if normalized == "zmq" and current_mode not in {
+            "keyboard_normal",
+            "keyboard_planner",
+        }:
+            raise ToolStateError(
+                "Tool was not executed because switching to ZMQ is only allowed "
+                f"from keyboard_normal or keyboard_planner. Current control_mode: {current_mode}."
+            )
+        if normalized == "keyboard" and current_mode not in {"zmq", "zmq_streaming"}:
+            raise ToolStateError(
+                "Tool was not executed because switching to keyboard is only allowed "
+                f"from zmq or zmq_streaming. Current control_mode: {current_mode}."
+            )
+        message = manager().send_key(key, f"switch_interface:{normalized}")
+        if normalized == "keyboard":
+            mode = "keyboard_normal"
+        else:
+            mode = normalized if normalized in CONTROL_MODES else manager().state.control_mode
+        manager().state.update(control_mode=mode, last_error="")
+        return f"{message}\n{runtime_state()}"
 
     @tool
     def unitree_g1_sim_start_control() -> str:
         """Start the control system by sending `]` in manager keyboard mode."""
-        return manager().send_key("]", "start_control")
+        require_tool_state("start_control")
+        message = manager().send_key("]", "start_control")
+        manager().state.update(control_mode="keyboard_normal", last_error="")
+        return f"{message}\n{runtime_state()}"
+
+    @tool
+    def unitree_g1_sim_switch_zmq() -> str:
+        """Switch manager to ZMQ interface by sending `#`."""
+        require_tool_state("switch_zmq")
+        return manager().switch_to_zmq()
+
+    @tool
+    def unitree_g1_sim_switch_keyboard() -> str:
+        """Switch manager to keyboard interface by sending `!`."""
+        require_tool_state("switch_keyboard")
+        return manager().switch_to_keyboard()
+
+    @tool
+    def unitree_g1_sim_toggle_zmq_streaming() -> str:
+        """Press ENTER in ZMQ mode to toggle ZMQ streaming enabled/disabled."""
+        require_tool_state("toggle_zmq_streaming")
+        return manager().toggle_zmq_streaming()
 
     @tool
     def unitree_g1_sim_toggle_planner() -> str:
-        """Toggle between Normal mode and Planner mode by sending ENTER."""
-        return manager().send_key("\n", "toggle_planner")
+        """Press ENTER in keyboard mode to toggle keyboard normal/planner."""
+        require_tool_state("toggle_planner")
+        message = manager().send_key("\n", "toggle_planner")
+        current = manager().state.snapshot()["control_mode"]
+        next_mode = (
+            "keyboard_normal"
+            if current == "keyboard_planner"
+            else "keyboard_planner"
+        )
+        manager().state.update(control_mode=next_mode, last_error="")
+        return f"{message}\n{runtime_state()}"
 
     @tool
     def unitree_g1_sim_keyboard(
@@ -899,7 +1461,9 @@ def get_unitree_g1_sim_tools(
         if key is None:
             supported = ", ".join(sorted(KEYBOARD_ACTIONS))
             raise ValueError(f"Unsupported keyboard action {action!r}. Supported: {supported}")
-        return manager().send_key(key, f"keyboard:{normalized}", repeats, interval)
+        require_tool_state("keyboard")
+        message = manager().send_key(key, f"keyboard:{normalized}", repeats, interval)
+        return f"{message}\n{runtime_state()}"
 
     @tool
     def unitree_g1_sim_select_mode(mode: int) -> str:
@@ -907,7 +1471,10 @@ def get_unitree_g1_sim_tools(
         safe_mode = int(mode)
         if safe_mode < 1 or safe_mode > 8:
             raise ValueError("Planner mode must be in the range 1-8.")
-        return manager().send_key(str(safe_mode), f"select_mode:{safe_mode}")
+        require_tool_state("select_mode")
+        message = manager().send_key(str(safe_mode), f"select_mode:{safe_mode}")
+        manager().state.update(control_mode="keyboard_planner", last_error="")
+        return f"{message}\n{runtime_state()}"
 
     @tool
     def unitree_g1_sim_adjust(
@@ -924,7 +1491,9 @@ def get_unitree_g1_sim_tools(
         if key is None:
             supported = ", ".join(sorted(ADJUST_ACTIONS))
             raise ValueError(f"Unsupported adjust action {action!r}. Supported: {supported}")
-        return manager().send_key(key, f"adjust:{normalized}", repeats, interval)
+        require_tool_state("adjust")
+        message = manager().send_key(key, f"adjust:{normalized}", repeats, interval)
+        return f"{message}\n{runtime_state()}"
 
     @tool
     def unitree_g1_sim_compliance(
@@ -942,16 +1511,20 @@ def get_unitree_g1_sim_tools(
         if key is None:
             supported = ", ".join(sorted(COMPLIANCE_ACTIONS))
             raise ValueError(f"Unsupported compliance action {action!r}. Supported: {supported}")
-        return manager().send_key(key, f"compliance:{normalized}", repeats, interval)
+        require_tool_state("compliance")
+        message = manager().send_key(key, f"compliance:{normalized}", repeats, interval)
+        return f"{message}\n{runtime_state()}"
 
     available_tools = {
-        "start": unitree_g1_sim_start_manager,
-        "stop": unitree_g1_sim_stop_manager,
-        "status": unitree_g1_sim_status,
+        "confirm_deployment": unitree_g1_sim_confirm_deployment,
+        "perform_skill": unitree_g1_sim_perform_skill,
         "perform_replay": unitree_g1_sim_perform_replay,
+        "list_skills": unitree_g1_sim_list_skills,
         "list_replays": unitree_g1_sim_list_replays,
-        "switch_interface": unitree_g1_sim_switch_interface,
         "start_control": unitree_g1_sim_start_control,
+        "switch_zmq": unitree_g1_sim_switch_zmq,
+        "switch_keyboard": unitree_g1_sim_switch_keyboard,
+        "toggle_zmq_streaming": unitree_g1_sim_toggle_zmq_streaming,
         "toggle_planner": unitree_g1_sim_toggle_planner,
         "keyboard": unitree_g1_sim_keyboard,
         "select_mode": unitree_g1_sim_select_mode,
